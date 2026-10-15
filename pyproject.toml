@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fingerprint-analyzer"
+version = "0.1.0"
+description = "Bitcoin transaction fingerprint analyzer"
+requires-python = ">=3.11"
+dependencies = ["scikit-learn>=1.2"]
+
+[project.optional-dependencies]
+pruning-eval = ["matplotlib>=3.7"]
+
+[project.scripts]
+fingerprint_analyzer = "fingerprint_analyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fingerprint_analyzer = ["data/*.csv"]
