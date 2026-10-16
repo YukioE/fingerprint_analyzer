@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +21,16 @@ MODEL_NAMES = {
     "random-forest": "Random Forest",
     "knn": "K-Nearest Neighbors",
 }
+
+
+def _bold(text: str) -> str:
+    if (
+        sys.stdout.isatty()
+        and not os.environ.get("NO_COLOR")
+        and os.environ.get("TERM") != "dumb"
+    ):
+        return f"\033[1m{text}\033[0m"
+    return text
 
 
 def _network_arguments(parser: argparse.ArgumentParser) -> None:
@@ -147,7 +158,7 @@ def _run_train() -> int:
     for result in results:
         evaluation = result["evaluation"]
         model_name = MODEL_NAMES.get(result["algorithm"], result["algorithm"])
-        print(f"\n{model_name}")
+        print(f"\n{_bold(model_name)}")
 
         if evaluation is None:
             print("  Holdout evaluation unavailable (no test samples).")
@@ -157,10 +168,12 @@ def _run_train() -> int:
                 f"{evaluation['test_samples']} test samples"
             )
             print(
-                f"  Accuracy: {evaluation['accuracy']:.1%} | "
-                f"Balanced accuracy: {evaluation['balanced_accuracy']:.1%} | "
-                f"Macro F1: {evaluation['f1_macro']:.1%} | "
-                f"Weighted F1: {evaluation['f1_weighted']:.1%}"
+                _bold(
+                    f"  Accuracy: {evaluation['accuracy']:.1%} | "
+                    f"Balanced accuracy: {evaluation['balanced_accuracy']:.1%} | "
+                    f"Macro F1: {evaluation['f1_macro']:.1%} | "
+                    f"Weighted F1: {evaluation['f1_weighted']:.1%}"
+                )
             )
             print("  Per-class precision / recall / F1:")
             report = evaluation["classification_report"]
@@ -201,10 +214,40 @@ def _run_train() -> int:
     return 0
 
 
+def _model_reasons(
+    feature_names: list[str],
+    features: list[int],
+    feature_importances: dict[str, float] | None,
+) -> str:
+    known = [
+        (feature, value)
+        for feature, value in zip(feature_names, features)
+        if value != -1
+    ]
+
+    if feature_importances:
+        ranked = []
+        for feature, value in known:
+            importance = feature_importances.get(feature, 0.0)
+            if value == 1:
+                ranked.append((importance, feature, 1))
+            elif value == 0:
+                ranked.append((importance * 0.3, feature, 0))
+        if ranked:
+            ranked.sort(key=lambda item: item[0], reverse=True)
+            return ", ".join(f"{feature}={value}" for _, feature, value in ranked[:3])
+
+    if known:
+        strongest = sorted(known, key=lambda item: abs(item[1]), reverse=True)[:3]
+        return ", ".join(f"{feature}={value}" for feature, value in strongest)
+
+    return "no usable signal"
+
+
 async def _run_identify(args) -> int:
     try:
         dataset_path = first_dataset()
-        _, classifiers, feature_names = train_models(dataset_path, mode="identify")
+        results, classifiers, feature_names = train_models(dataset_path, mode="identify")
         transactions = await _fetch_transactions(args)
         reports = [analyze(transaction) for transaction in transactions]
     except (OSError, ProviderError, ValueError) as exc:
@@ -218,6 +261,11 @@ async def _run_identify(args) -> int:
             f"as unknown (-1): {', '.join(missing_features)}",
             file=sys.stderr,
         )
+
+    model_importances = {
+        result["algorithm"]: result.get("feature_importances")
+        for result in results
+    }
 
     predictions = []
     for transaction, report in zip(transactions, reports):
@@ -237,7 +285,13 @@ async def _run_identify(args) -> int:
                 }
                 for index, score in scores
             ]
-        predictions.append({"txid": transaction.txid, "predictions": model_predictions})
+        predictions.append(
+            {
+                "txid": transaction.txid,
+                "features": features,
+                "predictions": model_predictions,
+            }
+        )
 
     print("Wallet identification")
     print(f"Dataset: {dataset_path.name}")
@@ -247,11 +301,17 @@ async def _run_identify(args) -> int:
             model_name = MODEL_NAMES.get(algorithm, algorithm)
             print(f"\n  [{model_index}] {model_name}")
             for rank, item in enumerate(items, start=1):
-                marker = ">" if rank == 1 else " "
-                print(
-                    f"    {marker} {rank}. {item['wallet_label']} "
+                contender = (
+                    f"      {rank}. {item['wallet_label']} "
                     f"({item['score']:.1%})"
                 )
+                print(_bold(contender) if rank == 1 else contender)
+            reasons = _model_reasons(
+                feature_names=feature_names,
+                features=prediction["features"],
+                feature_importances=model_importances.get(algorithm),
+            )
+            print(f"    Reasons: {reasons}")
 
     print("\n")
     return 0
