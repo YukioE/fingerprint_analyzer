@@ -13,7 +13,11 @@ from .feature_data import (
     load_transaction_list,
     write_feature_dataset,
 )
-from .ml import first_dataset, train_models
+from .identification import (
+    identify_fingerprint_features,
+    identify_transaction_changes,
+)
+from .ml import first_dataset, train_classifier, train_models
 from .provider import ElectrsProvider, ProviderError
 
 MODEL_NAMES = {
@@ -66,6 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     identify_parser.add_argument("txid", nargs="+", help="one or more transaction IDs")
     _network_arguments(identify_parser)
+
+    change_parser = subparsers.add_parser(
+        "change", help="identify likely change outputs by analyzing their spenders"
+    )
+    change_parser.add_argument("txid", help="transaction ID to analyze")
+    _network_arguments(change_parser)
     return parser
 
 
@@ -285,10 +295,12 @@ async def _run_identify(args) -> int:
                 }
                 for index, score in scores
             ]
+        identified_label = identify_fingerprint_features(features, classifiers)
         predictions.append(
             {
                 "txid": transaction.txid,
                 "features": features,
+                "identified_label": identified_label,
                 "predictions": model_predictions,
             }
         )
@@ -297,6 +309,11 @@ async def _run_identify(args) -> int:
     print(f"Dataset: {dataset_path.name}")
     for prediction in predictions:
         print(f"\nTransaction: {prediction['txid']}")
+        label = prediction["identified_label"]
+        print(
+            "  Majority-vote label: "
+            + (label if label is not None else "no majority")
+        )
         for model_index, (algorithm, items) in enumerate(prediction["predictions"].items(), start=1):
             model_name = MODEL_NAMES.get(algorithm, algorithm)
             print(f"\n  [{model_index}] {model_name}")
@@ -317,6 +334,65 @@ async def _run_identify(args) -> int:
     return 0
 
 
+async def _run_change(args) -> int:
+    try:
+        dataset_path = first_dataset()
+        decision_tree, feature_names = train_classifier(
+            dataset_path, "decision-tree"
+        )
+
+        provider = _provider(args)
+        transaction = await provider.get_transaction(args.txid)
+        result = await identify_transaction_changes(
+            transaction, provider, {"decision-tree": decision_tree}, feature_names
+        )
+    except (OSError, ProviderError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Dataset:          {dataset_path.name}")
+    print(f"Transaction:      {result.transaction_id}")
+    print(f"Decision-tree wallet: {result.wallet_label or 'no prediction'}")
+
+    likely_change_outputs = [
+        output.output_index
+        for output in result.output_spends
+        if output.is_change is True
+    ]
+    print("\nLikely change outputs:")
+    if likely_change_outputs:
+        print("".join(f"  - Output {index}\n" for index in likely_change_outputs))
+    else:
+        print("None identified")
+
+    if not result.output_spends:
+        print("No outputs found.")
+
+    for output in result.output_spends:
+        output_heading = f"Output {output.output_index}"
+        if output.is_change is True:
+            output_heading = _bold(output_heading)
+        print(f"\n{output_heading}")
+        if output.spending_transaction_id is None:
+            print("  Status:       Unspent")
+            continue
+
+        wallet_label = output.wallet_label or "no majority"
+        if output.is_change is True:
+            change_label = "Likely change"
+        elif output.is_change is False:
+            change_label = "Not identified as change"
+        else:
+            change_label = "Undetermined"
+        if output.is_change is True:
+            change_label = _bold(change_label)
+        print(f"  Status:       {change_label}")
+        print(f"  Spent by:     {output.spending_transaction_id}")
+        print(f"  Wallet label: {wallet_label}")
+
+    return 0
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.command in {"tx", "transaction"}:
@@ -325,6 +401,8 @@ def main() -> None:
         exit_code = asyncio.run(_run_dataset(args))
     elif args.command == "train":
         exit_code = _run_train()
+    elif args.command == "change":
+        exit_code = asyncio.run(_run_change(args))
     else:
         exit_code = asyncio.run(_run_identify(args))
     raise SystemExit(exit_code)

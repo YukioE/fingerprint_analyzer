@@ -29,9 +29,37 @@ class ElectrsProvider(TransactionProvider):
     async def get_transaction(self, txid: str) -> Transaction:
         url = f"{self.base_url}/tx/{txid}"
         raw = await asyncio.to_thread(self._fetch_json, url)
+        if not isinstance(raw, dict):
+            raise ProviderError(f"invalid transaction response for {txid}")
         return self._parse(raw)
 
-    def _fetch_json(self, url: str) -> dict:
+    async def get_output_spends(self, txid: str) -> list[str | None]:
+        """Return the spending transaction ID for each output, if it is spent."""
+        url = f"{self.base_url}/tx/{txid}/outspends"
+        raw = await asyncio.to_thread(self._fetch_json, url)
+        if not isinstance(raw, list):
+            raise ProviderError(f"invalid output-spends response for {txid}")
+
+        spending_txids = []
+        for output_index, spend in enumerate(raw):
+            if not isinstance(spend, dict) or not isinstance(spend.get("spent"), bool):
+                raise ProviderError(
+                    f"invalid output-spends entry for {txid} at output {output_index}"
+                )
+            if not spend["spent"]:
+                spending_txids.append(None)
+                continue
+
+            spending_txid = spend.get("txid")
+            if not isinstance(spending_txid, str):
+                raise ProviderError(
+                    f"missing spending transaction ID for {txid} output {output_index}"
+                )
+            spending_txids.append(spending_txid)
+
+        return spending_txids
+
+    def _fetch_json(self, url: str) -> object:
         request = urllib.request.Request(
             url, headers={"User-Agent": "fingerprint-analyzer/0.1"}
         )
@@ -92,4 +120,3 @@ class ElectrsProvider(TransactionProvider):
                 block_time=status.get("block_time"),
             ),
         )
-

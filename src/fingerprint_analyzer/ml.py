@@ -94,6 +94,14 @@ def _new_classifier(algorithm: str, training_size: int):
     raise ValueError(f"Unsupported algorithm: {algorithm}")
 
 
+def train_classifier(dataset_path: Path, algorithm: str) -> tuple[object, list[str]]:
+    """Train one classifier on the full dataset for identification."""
+    features, labels, feature_names = load_feature_dataset(dataset_path)
+    classifier = _new_classifier(algorithm, len(features))
+    classifier.fit(features, labels)
+    return classifier, feature_names
+
+
 def _holdout_indices(labels: list[str]) -> tuple[list[int], list[int]]:
     groups: dict[str, list[int]] = defaultdict(list)
     for index, label in enumerate(labels):
