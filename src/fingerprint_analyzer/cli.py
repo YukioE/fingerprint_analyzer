@@ -185,17 +185,71 @@ def _run_train() -> int:
                     f"Weighted F1: {evaluation['f1_weighted']:.1%}"
                 )
             )
-            print("  Per-class precision / recall / F1:")
+            print("  Per-class one-vs-rest metrics:")
             report = evaluation["classification_report"]
-            for label in statistics["class_distribution"]:
-                metrics = report[label]
-                print(
-                    f"    {label}: {metrics['precision']:.1%} / "
-                    f"{metrics['recall']:.1%} / {metrics['f1-score']:.1%}"
-                )
-
             labels = evaluation["confusion_matrix_labels"]
             matrix = evaluation["confusion_matrix"]
+            total = sum(sum(row) for row in matrix)
+            label_width = max(len("Class"), *(len(label) for label in labels))
+            metric_columns = ("TPr", "TNr", "FPr", "FNr", "Precision", "Recall", "F1")
+            metric_widths = {
+                "TPr": 7,
+                "TNr": 7,
+                "FPr": 7,
+                "FNr": 7,
+                "Precision": 9,
+                "Recall": 7,
+                "F1": 7,
+            }
+            print(
+                f"    {'Class':<{label_width}}  "
+                + "  ".join(
+                    f"{column:>{metric_widths[column]}}"
+                    for column in metric_columns
+                )
+            )
+            print(
+                f"    {'-' * label_width}  "
+                + "  ".join("-" * metric_widths[column] for column in metric_columns)
+            )
+            for index, label in enumerate(labels):
+                metrics = report[label]
+                true_positive = matrix[index][index]
+                false_negative = sum(matrix[index]) - true_positive
+                false_positive = (
+                    sum(row[index] for row in matrix) - true_positive
+                )
+                true_negative = total - true_positive - false_negative - false_positive
+                actual_positives = true_positive + false_negative
+                actual_negatives = true_negative + false_positive
+                true_positive_rate = (
+                    f"{100 * true_positive / actual_positives:.1f}%"
+                    if actual_positives
+                    else "n/a"
+                )
+                false_negative_rate = (
+                    f"{100 * false_negative / actual_positives:.1f}%"
+                    if actual_positives
+                    else "n/a"
+                )
+                true_negative_rate = (
+                    f"{100 * true_negative / actual_negatives:.1f}%"
+                    if actual_negatives
+                    else "n/a"
+                )
+                false_positive_rate = (
+                    f"{100 * false_positive / actual_negatives:.1f}%"
+                    if actual_negatives
+                    else "n/a"
+                )
+                print(
+                    f"    {label:<{label_width}}  "
+                    f"{true_positive_rate:>7}  {true_negative_rate:>7}  "
+                    f"{false_positive_rate:>7}  {false_negative_rate:>7}  "
+                    f"{metrics['precision']:>9.1%}  {metrics['recall']:>7.1%}  "
+                    f"{metrics['f1-score']:>7.1%}"
+                )
+
             column_width = max(5, *(len(label) for label in labels))
             axis_label = "Actual / Predicted"
             row_label_width = max(len(axis_label), column_width)
