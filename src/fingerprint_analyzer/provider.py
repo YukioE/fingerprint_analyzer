@@ -59,18 +59,68 @@ class ElectrsProvider(TransactionProvider):
 
         return spending_txids
 
+    async def get_tip_height(self) -> int:
+        raw = await asyncio.to_thread(
+            self._fetch_text, f"{self.base_url}/blocks/tip/height"
+        )
+        try:
+            height = int(raw.strip())
+        except (TypeError, ValueError) as exc:
+            raise ProviderError("invalid tip-height response") from exc
+        if height < 0:
+            raise ProviderError("invalid tip-height response")
+        return height
+
+    async def get_block_hash(self, height: int) -> str:
+        raw = await asyncio.to_thread(
+            self._fetch_text, f"{self.base_url}/block-height/{height}"
+        )
+        block_hash = raw.strip()
+        if not block_hash:
+            raise ProviderError(f"invalid block-hash response at height {height}")
+        return block_hash
+
+    async def get_block_timestamp(self, block_hash: str) -> int:
+        raw = await asyncio.to_thread(
+            self._fetch_json, f"{self.base_url}/block/{block_hash}"
+        )
+        if not isinstance(raw, dict) or not isinstance(raw.get("timestamp"), int):
+            raise ProviderError(f"invalid block response for {block_hash}")
+        return raw["timestamp"]
+
+    async def get_block_txids(self, block_hash: str) -> list[str]:
+        raw = await asyncio.to_thread(
+            self._fetch_json, f"{self.base_url}/block/{block_hash}/txids"
+        )
+        if not isinstance(raw, list) or not raw or any(
+            not isinstance(txid, str) or not txid for txid in raw
+        ):
+            raise ProviderError(f"invalid transaction list for block {block_hash}")
+        return raw
+
     def _fetch_json(self, url: str) -> object:
+        body = self._fetch_text(url)
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise ProviderError(f"invalid JSON response from {url}") from exc
+
+    def _fetch_text(self, url: str) -> str:
         request = urllib.request.Request(
             url, headers={"User-Agent": "fingerprint-analyzer/0.1"}
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read())
+                return response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
-                raise TransactionNotFoundError(f"transaction not found: {url}") from exc
+                if url.startswith(f"{self.base_url}/tx/"):
+                    raise TransactionNotFoundError(
+                        f"transaction not found: {url}"
+                    ) from exc
+                raise ProviderError(f"resource not found: {url}") from exc
             raise ProviderError(f"HTTP {exc.code} while fetching transaction") from exc
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             raise ProviderError(f"request failed: {exc}") from exc
 
     def _parse(self, raw: dict) -> Transaction:

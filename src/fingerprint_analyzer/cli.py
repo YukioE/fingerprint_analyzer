@@ -5,7 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+from psycopg import Error as PsycopgError
+
 from .analyzer import analyze
+from .collector import collect_forever
+from .database import FingerprintStore
 from .feature_data import (
     NETWORK_URLS,
     analyze_transaction_rows,
@@ -37,10 +41,18 @@ def _bold(text: str) -> str:
     return text
 
 
+def _mempool_url_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--mempool-url",
+        help="base URL of an Electrs-compatible mempool API (overrides the network default)",
+    )
+
+
 def _network_arguments(parser: argparse.ArgumentParser) -> None:
     network_group = parser.add_mutually_exclusive_group()
     network_group.add_argument("--testnet", action="store_true", help="use Bitcoin testnet3")
     network_group.add_argument("--testnet4", action="store_true", help="use Bitcoin testnet4")
+    _mempool_url_argument(parser)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="convert labeled transactions from a CSV to fingerprint features",
     )
     dataset_parser.add_argument("input_csv", type=Path, help="CSV with txid,wallet_label,network")
+    _mempool_url_argument(dataset_parser)
 
     subparsers.add_parser(
         "train", help="train all classifiers using the first CSV in the data directory"
@@ -76,11 +89,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     change_parser.add_argument("txid", help="transaction ID to analyze")
     _network_arguments(change_parser)
+
+    collect_parser = subparsers.add_parser(
+        "collect",
+        help="continuously analyze confirmed transactions and store fingerprints in PostgreSQL",
+    )
+    _network_arguments(collect_parser)
+    collect_parser.add_argument(
+        "--database-url",
+        default=os.environ.get("DATABASE_URL"),
+        help="PostgreSQL connection URL (defaults to DATABASE_URL)",
+    )
+    collect_parser.add_argument(
+        "--start-height",
+        type=int,
+        help="first block to collect; by default starts at the current tip",
+    )
+    collect_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=10,
+        help="seconds between checks for new blocks (default: 10)",
+    )
+    collect_parser.add_argument(
+        "--block-interval",
+        type=int,
+        default=1,
+        help="store every Nth block (default: 1, store every block)",
+    )
     return parser
 
 
 def _provider(args) -> ElectrsProvider:
-    if args.testnet4:
+    if args.mempool_url:
+        base_url = args.mempool_url
+    elif args.testnet4:
         base_url = NETWORK_URLS["testnet4"]
     elif args.testnet:
         base_url = NETWORK_URLS["testnet"]
@@ -114,7 +157,7 @@ async def _run_tx(args) -> int:
 async def _run_dataset(args) -> int:
     try:
         rows = load_transaction_list(args.input_csv, require_label=True)
-        reports = await analyze_transaction_rows(rows)
+        reports = await analyze_transaction_rows(rows, args.mempool_url)
         if not reports:
             raise ValueError("No transactions could be fetched; no CSV was written")
         feature_names = write_feature_dataset(sys.stdout, reports)
@@ -447,6 +490,43 @@ async def _run_change(args) -> int:
     return 0
 
 
+async def _run_collect(args) -> int:
+    if not args.database_url:
+        print(
+            "Error: provide --database-url or set DATABASE_URL",
+            file=sys.stderr,
+        )
+        return 1
+    if args.start_height is not None and args.start_height < 0:
+        print("Error: --start-height must not be negative", file=sys.stderr)
+        return 1
+    if args.poll_interval <= 0:
+        print("Error: --poll-interval must be greater than zero", file=sys.stderr)
+        return 1
+    if args.block_interval <= 0:
+        print("Error: --block-interval must be greater than zero", file=sys.stderr)
+        return 1
+
+    store = None
+    try:
+        store = FingerprintStore(args.database_url)
+        store.ensure_schema()
+        await collect_forever(
+            _provider(args),
+            store,
+            args.start_height,
+            args.poll_interval,
+            args.block_interval,
+        )
+    except (OSError, PsycopgError, ProviderError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if store is not None:
+            store.close()
+    return 0
+
+
 def main() -> None:
     args = build_parser().parse_args()
     if args.command in {"tx", "transaction"}:
@@ -457,6 +537,12 @@ def main() -> None:
         exit_code = _run_train()
     elif args.command == "change":
         exit_code = asyncio.run(_run_change(args))
+    elif args.command == "collect":
+        try:
+            exit_code = asyncio.run(_run_collect(args))
+        except KeyboardInterrupt:
+            print("Collector stopped.", file=sys.stderr)
+            exit_code = 130
     else:
         exit_code = asyncio.run(_run_identify(args))
     raise SystemExit(exit_code)

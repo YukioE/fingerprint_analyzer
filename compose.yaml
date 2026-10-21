@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16-alpine
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=200
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_completion_target=0.9
+    environment:
+      POSTGRES_DB: fingerprints
+      POSTGRES_USER: fingerprint
+      POSTGRES_PASSWORD: fingerprint
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

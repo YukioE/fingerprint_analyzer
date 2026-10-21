@@ -21,7 +21,7 @@ NETWORK_URLS = {
     "testnet3": "https://mempool.space/testnet/api",
     "testnet4": "https://mempool.space/testnet4/api",
 }
-MAX_CONCURRENCY = 10
+MAX_CONCURRENCY = 64
 
 
 @dataclass(frozen=True)
@@ -112,15 +112,18 @@ def feature_vector(report: FingerprintReport, feature_names: list[str]) -> list[
 
 async def analyze_transaction_rows(
     rows: list[TransactionRow],
+    mempool_url: str | None = None,
 ) -> list[tuple[TransactionRow, FingerprintReport]]:
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    providers = {
-        base_url: ElectrsProvider(base_url)
-        for base_url in {NETWORK_URLS[row.network] for row in rows}
-    }
+    base_urls = (
+        {mempool_url}
+        if mempool_url
+        else {NETWORK_URLS[row.network] for row in rows}
+    )
+    providers = {base_url: ElectrsProvider(base_url) for base_url in base_urls}
 
     async def analyze_row(row: TransactionRow) -> tuple[TransactionRow, FingerprintReport] | None:
-        base_url = NETWORK_URLS[row.network]
+        base_url = mempool_url or NETWORK_URLS[row.network]
         try:
             async with semaphore:
                 transaction = await providers[base_url].get_transaction(row.txid)
