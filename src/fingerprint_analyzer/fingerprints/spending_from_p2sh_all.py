@@ -1,3 +1,16 @@
-from .base import detector
+from .base import detector, has_input_type
+
+
 @detector("spending_from_p2sh_all")
-def detect(ctx): return bool(ctx.input_type_set & {"p2sh", "p2sh_all", "p2sh_multisig", "p2sh_p2wpkh"})
+def detect(ctx):
+    return has_input_type(
+        ctx,
+        {
+            "p2sh",
+            "p2sh_all",
+            "p2sh_unknown",
+            "p2sh_multisig",
+            "p2sh_p2wpkh",
+            "p2sh_p2wsh",
+        },
+    )

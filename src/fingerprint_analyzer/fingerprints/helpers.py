@@ -11,26 +11,12 @@ def script_bytes(value: str) -> bytes:
 
 
 def is_multisig_script(script: bytes) -> bool:
-    return bool(script) and script[-1] == 0xAE
+    return bool(script) and script[-1] in {0xAE, 0xAF}
 
 
 def last_push(script: bytes) -> bytes:
-    if not script:
-        return b""
-
-    index = 0
-    last_value = b""
-    while index < len(script):
-        opcode = script[index]
-        index += 1
-
-        if opcode == 0 or opcode > 75 or index + opcode > len(script):
-            break
-
-        last_value = script[index : index + opcode]
-        index += opcode
-
-    return last_value
+    pushes = script_pushes(script)
+    return pushes[-1] if pushes else b""
 
 
 def script_pushes(script: bytes) -> list[bytes]:
@@ -92,21 +78,37 @@ def input_type(inp: TxInput) -> str:
     script_type = inp.prevout.scriptpubkey_type.lower()
     script = script_bytes(inp.prevout.scriptpubkey)
 
-    if script_type in {"p2pk", "pubkey"} or (script and script[-1] == 0xAC):
+    if script_type in {"p2pk", "pubkey"} or (
+        len(script) in {35, 67}
+        and script[0] in {33, 65}
+        and script[-1] == 0xAC
+    ):
         return "p2pk"
-    if script_type in {"p2pkh", "pubkeyhash"}:
+    if script_type in {"p2pkh", "pubkeyhash"} or (
+        len(script) == 25
+        and script.startswith(b"\x76\xa9\x14")
+        and script.endswith(b"\x88\xac")
+    ):
         return "p2pkh"
     if script_type in {"p2tr", "witness_v1_taproot"} or script.startswith(b"\x51\x20"):
         return "p2tr"
     if script_type in {"p2wpkh", "witness_v0_keyhash"} or script.startswith(b"\x00\x14"):
         return "p2wpkh"
     if script_type in {"p2wsh", "witness_v0_scripthash"} or script.startswith(b"\x00\x20"):
-        witness_script = script_bytes((inp.witness or [""])[-1])
+        if not inp.witness:
+            return "p2wsh_unknown"
+        witness_script = script_bytes(inp.witness[-1])
         return "p2wsh_multisig" if is_multisig_script(witness_script) else "p2wsh_all"
-    if script_type in {"p2sh", "scripthash"}:
+    if script_type in {"p2sh", "scripthash"} or (
+        len(script) == 23 and script.startswith(b"\xa9\x14") and script.endswith(b"\x87")
+    ):
         redeem = last_push(script_bytes(inp.scriptsig))
+        if not redeem:
+            return "p2sh_unknown"
         if redeem.startswith(b"\x00\x14"):
             return "p2sh_p2wpkh"
+        if redeem.startswith(b"\x00\x20"):
+            return "p2sh_p2wsh"
         return "p2sh_multisig" if is_multisig_script(redeem) else "p2sh_all"
     return script_type or "unknown"
 

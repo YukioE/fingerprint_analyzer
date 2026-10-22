@@ -1,3 +1,6 @@
-from .base import detector
+from .base import detector, has_input_type
+
+
 @detector("spending_from_p2tr")
-def detect(ctx): return "p2tr" in ctx.input_type_set
+def detect(ctx):
+    return has_input_type(ctx, {"p2tr"})

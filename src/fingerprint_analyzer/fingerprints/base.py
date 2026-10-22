@@ -28,6 +28,14 @@ class FingerprintContext:
         )
 
 
+def has_input_type(ctx: FingerprintContext, input_types: set[str]) -> bool | None:
+    if ctx.input_type_set & input_types:
+        return True
+    if ctx.input_type_set & {"unknown", "p2sh_unknown", "p2wsh_unknown"}:
+        return None
+    return False
+
+
 def detector(name: str):
     def register(function: FingerprintDetector) -> FingerprintDetector:
         function.fingerprint_name = name

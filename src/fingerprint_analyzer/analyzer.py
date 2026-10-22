@@ -65,7 +65,7 @@ def get_sighash_bytes(tx: Transaction) -> set[int]:
 
 
 def analyze(tx: Transaction) -> FingerprintReport:
-    input_types = {input_type(inp) for inp in tx.inputs}
+    input_types = {input_type(inp) for inp in tx.inputs if not inp.is_coinbase}
     output_types = {output_type(output) for output in tx.outputs}
     sequence_hex = [f"0x{inp.sequence:08x}" for inp in tx.inputs if not inp.is_coinbase]
     sequence_set = sorted(set(sequence_hex))
