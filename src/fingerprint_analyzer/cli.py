@@ -19,10 +19,7 @@ from .feature_data import (
     load_transaction_list,
     write_feature_dataset,
 )
-from .identification import (
-    identify_fingerprint_features,
-    identify_transaction_changes,
-)
+from .identification import identify_transaction_changes
 from .ml import first_dataset, train_classifier, train_models
 from .provider import ElectrsProvider, ProviderError
 
@@ -60,6 +57,15 @@ def _network_arguments(parser: argparse.ArgumentParser) -> None:
     _mempool_url_argument(parser)
 
 
+def _dataset_argument(parser: argparse.ArgumentParser) -> None:
+    """Add an optional path to the fingerprint dataset used to train models."""
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        help="CSV training dataset (defaults to the first CSV in the data directory)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for all supported commands."""
     parser = argparse.ArgumentParser(
@@ -80,20 +86,23 @@ def build_parser() -> argparse.ArgumentParser:
     dataset_parser.add_argument("input_csv", type=Path, help="CSV with txid,wallet_label,network")
     _mempool_url_argument(dataset_parser)
 
-    subparsers.add_parser(
+    train_parser = subparsers.add_parser(
         "train", help="train all classifiers using the first CSV in the data directory"
     )
+    _dataset_argument(train_parser)
 
     identify_parser = subparsers.add_parser(
         "identify", help="identify the wallet for one or more transactions"
     )
     identify_parser.add_argument("txid", nargs="+", help="one or more transaction IDs")
+    _dataset_argument(identify_parser)
     _network_arguments(identify_parser)
 
     change_parser = subparsers.add_parser(
         "change", help="identify likely change outputs by analyzing their spenders"
     )
     change_parser.add_argument("txid", help="transaction ID to analyze")
+    _dataset_argument(change_parser)
     _network_arguments(change_parser)
 
     collect_parser = subparsers.add_parser(
@@ -182,10 +191,10 @@ async def _run_dataset(args) -> int:
     return 0
 
 
-def _run_train() -> int:
+def _run_train(args) -> int:
     """Train and print evaluation results for each supported classifier."""
     try:
-        dataset_path = first_dataset()
+        dataset_path = args.dataset or first_dataset()
         results, _, _ = train_models(dataset_path, mode="evaluate")
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -365,9 +374,9 @@ def _model_reasons(
 
 
 async def _run_identify(args) -> int:
-    """Classify each requested transaction using all trained models."""
+    """Classify transactions with the decision tree and show model comparisons."""
     try:
-        dataset_path = first_dataset()
+        dataset_path = args.dataset or first_dataset()
         results, classifiers, feature_names = train_models(dataset_path, mode="identify")
         transactions = await _fetch_transactions(args)
         reports = [analyze(transaction) for transaction in transactions]
@@ -406,12 +415,10 @@ async def _run_identify(args) -> int:
                 }
                 for index, score in scores
             ]
-        identified_label = identify_fingerprint_features(features, classifiers)
         predictions.append(
             {
                 "txid": transaction.txid,
                 "features": features,
-                "identified_label": identified_label,
                 "predictions": model_predictions,
             }
         )
@@ -420,11 +427,6 @@ async def _run_identify(args) -> int:
     print(f"Dataset: {dataset_path.name}")
     for prediction in predictions:
         print(f"\nTransaction: {prediction['txid']}")
-        label = prediction["identified_label"]
-        print(
-            "  Majority-vote label: "
-            + (label if label is not None else "no majority")
-        )
         for model_index, (algorithm, items) in enumerate(prediction["predictions"].items(), start=1):
             model_name = MODEL_NAMES.get(algorithm, algorithm)
             print(f"\n  [{model_index}] {model_name}")
@@ -448,7 +450,7 @@ async def _run_identify(args) -> int:
 async def _run_change(args) -> int:
     """Identify likely change outputs by comparing spending wallet labels."""
     try:
-        dataset_path = first_dataset()
+        dataset_path = args.dataset or first_dataset()
         decision_tree, feature_names = train_classifier(
             dataset_path, "decision-tree"
         )
@@ -489,7 +491,7 @@ async def _run_change(args) -> int:
             print("  Status:       Unspent")
             continue
 
-        wallet_label = output.wallet_label or "no majority"
+        wallet_label = output.wallet_label or "no prediction"
         if output.is_change is True:
             change_label = "Likely change"
         elif output.is_change is False:
@@ -551,7 +553,7 @@ def main() -> None:
     elif args.command == "dataset":
         exit_code = asyncio.run(_run_dataset(args))
     elif args.command == "train":
-        exit_code = _run_train()
+        exit_code = _run_train(args)
     elif args.command == "change":
         exit_code = asyncio.run(_run_change(args))
     elif args.command == "collect":

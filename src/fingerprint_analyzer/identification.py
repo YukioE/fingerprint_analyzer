@@ -1,7 +1,6 @@
 """Identify a wallet from a transaction's fingerprint features."""
 
 import asyncio
-from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -30,26 +29,17 @@ class ChangeDetectionResult:
     output_spends: list[OutputSpendIdentification]
 
 
-def _majority_label(
+def _decision_tree_label(
     feature_values: list[int],
     classifiers: Mapping[str, object],
 ) -> str | None:
-    """Return a label only when more than half of the classifiers agree."""
-    if not classifiers:
-        raise ValueError("At least one trained classifier is required")
+    """Return the decision-tree prediction from a trained classifier set."""
+    classifier = classifiers.get("decision-tree")
+    if classifier is None:
+        raise ValueError("A trained decision-tree classifier is required")
 
-    votes: Counter[str] = Counter()
-    for classifier in classifiers.values():
-        # Classifiers expect a batch of samples, so wrap the single vector.
-        predicted_label = getattr(classifier, "predict")([feature_values])[0]
-        votes[str(predicted_label)] += 1
-
-    majority_label, vote_count = votes.most_common(1)[0]
-    required_votes = len(classifiers) / 2
-    if vote_count > required_votes:
-        return majority_label
-
-    return None
+    predicted_label = getattr(classifier, "predict")([feature_values])[0]
+    return str(predicted_label)
 
 
 def identify_transaction(
@@ -57,15 +47,15 @@ def identify_transaction(
     classifiers: Mapping[str, object],
     feature_names: list[str],
 ) -> str | None:
-    """Analyze a transaction and identify its wallet using a strict majority.
+    """Analyze a transaction and identify its wallet with the decision tree.
 
     The transaction is first converted into the requested feature order. Each
-    classifier then predicts a wallet label, and a label is returned only if
-    more than half of the classifiers agree.
+    feature is passed to the trained decision-tree classifier, which predicts
+    a wallet label.
     """
     report = analyze(transaction)
     ordered_features = feature_vector(report, feature_names)
-    return _majority_label(ordered_features, classifiers)
+    return _decision_tree_label(ordered_features, classifiers)
 
 
 async def identify_transaction_changes(
@@ -77,10 +67,10 @@ async def identify_transaction_changes(
     """Identify a transaction and check which spent outputs return to its wallet.
 
     For every spent output, the corresponding spending transaction is fetched
-    from the provider and classified with the same majority-vote method as the
+    from the provider and classified with the same decision-tree model as the
     original transaction. An output is considered change when both
     transactions have the same identified wallet label. This is a heuristic;
-    transactions with no majority label cannot be assessed.
+    transactions without a prediction cannot be assessed.
     """
     wallet_label = identify_transaction(transaction, classifiers, feature_names)
     spending_txids = await provider.get_output_spends(transaction.txid)
@@ -133,5 +123,5 @@ def identify_fingerprint_features(
     feature_values: list[int],
     classifiers: Mapping[str, object],
 ) -> str | None:
-    """Identify a wallet from an already ordered fingerprint feature vector."""
-    return _majority_label(feature_values, classifiers)
+    """Identify a wallet from an ordered feature vector using the decision tree."""
+    return _decision_tree_label(feature_values, classifiers)
