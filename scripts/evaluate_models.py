@@ -15,6 +15,8 @@ from fingerprint_analyzer.ml import (
     load_feature_dataset,
 )
 
+PLOT_DPI = 300
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -116,14 +118,12 @@ def main() -> int:
         axis.plot(
             ccp_alphas,
             train_scores,
-            marker="o",
             label="train",
             drawstyle="steps-post",
         )
         axis.plot(
             ccp_alphas,
             test_scores,
-            marker="o",
             label="test",
             drawstyle="steps-post",
         )
@@ -174,8 +174,8 @@ def main() -> int:
 
         figure, axis = plt.subplots()
         k_values = range(1, max_k + 1)
-        axis.plot(k_values, knn_train_scores, marker="o", label="train")
-        axis.plot(k_values, knn_test_scores, marker="o", label="holdout")
+        axis.plot(k_values, knn_train_scores, label="train")
+        axis.plot(k_values, knn_test_scores, label="holdout")
         axis.set_xticks(list(k_values))
         axis.set_xlabel("number of neighbors (k)")
         axis.set_ylabel("accuracy")
@@ -196,7 +196,7 @@ def main() -> int:
                         if name == "decision_tree_pruning"
                         else args.output.parent / f"{name}.png"
                     )
-                    plot_figure.savefig(output_path)
+                    plot_figure.savefig(output_path, dpi=PLOT_DPI)
             plt.show()
         else:
             for name, plot_figure in figures:
@@ -209,7 +209,7 @@ def main() -> int:
                         else Path(f"{name}.png")
                     )
                 )
-                plot_figure.savefig(output_path)
+                plot_figure.savefig(output_path, dpi=PLOT_DPI)
                 print(f"Plot saved to {output_path}")
         for _, plot_figure in figures:
             plt.close(plot_figure)
