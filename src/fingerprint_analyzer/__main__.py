@@ -1,3 +1,5 @@
+"""Run the fingerprint analyzer command-line interface as a module."""
+
 from .cli import main
 
 

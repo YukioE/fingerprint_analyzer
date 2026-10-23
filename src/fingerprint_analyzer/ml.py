@@ -1,3 +1,5 @@
+"""Load fingerprint datasets, train classifiers, and evaluate their predictions."""
+
 import csv
 import random
 from collections import Counter, defaultdict
@@ -28,6 +30,7 @@ ANALYZER_FEATURES = frozenset(detector.fingerprint_name for detector in DETECTOR
 
 
 def first_dataset() -> Path:
+    """Return the alphabetically first bundled CSV dataset."""
     datasets = sorted(DATA_DIRECTORY.glob("*.csv"))
     if not datasets:
         raise ValueError(f"No CSV training dataset found in {DATA_DIRECTORY}")
@@ -35,6 +38,7 @@ def first_dataset() -> Path:
 
 
 def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[str]]:
+    """Load supported fingerprint columns and wallet labels from a CSV file."""
     with path.open(newline="", encoding="utf-8-sig") as source:
         reader = csv.DictReader(source)
         if not reader.fieldnames or LABEL_COLUMN not in reader.fieldnames:
@@ -83,6 +87,7 @@ def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[s
 
 
 def _new_classifier(algorithm: str, training_size: int):
+    """Create a configured classifier, adapting KNN to the available samples."""
     if algorithm == "decision-tree":
         return DecisionTreeClassifier(random_state=22)
     if algorithm == "random-forest":
@@ -103,6 +108,7 @@ def train_classifier(dataset_path: Path, algorithm: str) -> tuple[object, list[s
 
 
 def _holdout_indices(labels: list[str]) -> tuple[list[int], list[int]]:
+    """Create a deterministic per-wallet train/test split without losing rare labels."""
     groups: dict[str, list[int]] = defaultdict(list)
     for index, label in enumerate(labels):
         groups[label].append(index)
@@ -126,6 +132,7 @@ def _holdout_indices(labels: list[str]) -> tuple[list[int], list[int]]:
 def dataset_statistics(
     features: list[list[int]], labels: list[str], feature_names: list[str]
 ) -> dict:
+    """Summarize dataset size, label balance, and known/unknown feature values."""
     wallet_count = len(set(labels))
     return {
         "samples": len(features),
@@ -144,6 +151,7 @@ def _evaluate(
     test_labels: list[str],
     all_labels: list[str],
 ) -> dict:
+    """Predict the holdout samples and calculate the standard classification metrics."""
     predictions = classifier.predict(test_features)
     return _evaluate_predictions(test_labels, predictions, all_labels)
 
@@ -153,6 +161,7 @@ def _evaluate_predictions(
     predictions: list[str],
     all_labels: list[str],
 ) -> dict:
+    """Calculate metrics and a confusion matrix from known labels and predictions."""
     return {
         "test_samples": len(test_labels),
         "accuracy": float(accuracy_score(test_labels, predictions)),
@@ -189,6 +198,7 @@ def train_models(
     *,
     mode: TrainingMode = "evaluate",
 ) -> tuple[list[dict], dict, list[str]]:
+    """Train all supported models for evaluation or full-dataset identification."""
     if mode not in {"evaluate", "identify"}:
         raise ValueError(f"Unsupported training mode: {mode}")
 
@@ -210,6 +220,7 @@ def train_models(
         classifier = None
 
         if mode == "evaluate" and testing_indices:
+            # Keep the holdout separate so reported scores measure unseen samples.
             classifier = _new_classifier(algorithm, len(training_indices))
             training_features = [features[index] for index in training_indices]
             training_labels = [labels[index] for index in training_indices]

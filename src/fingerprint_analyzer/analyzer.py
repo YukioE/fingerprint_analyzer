@@ -1,3 +1,5 @@
+"""Build a structured fingerprint report from a Bitcoin transaction."""
+
 from dataclasses import asdict, dataclass
 
 from .fingerprints import DETECTORS, FingerprintContext
@@ -7,6 +9,8 @@ from .model import Transaction
 
 @dataclass
 class FingerprintReport:
+    """Analysis results and transaction details ready for JSON output."""
+
     txid: str
     version: int
     locktime: int
@@ -23,6 +27,7 @@ class FingerprintReport:
     details: dict[str, object]
 
     def to_dict(self) -> dict:
+        """Convert the report to a flat dictionary for the command-line output."""
         report = asdict(self)
         details = report.pop("details")
         flattened = {}
@@ -34,6 +39,7 @@ class FingerprintReport:
 
 
 def _signature_byte_from_script(script: bytes) -> int | None:
+    """Read the sighash byte from the first pushed signature in a script."""
     if not script or len(script) < 2:
         return None
     push_length = script[0]
@@ -46,6 +52,7 @@ def _signature_byte_from_script(script: bytes) -> int | None:
 
 
 def get_sighash_bytes(tx: Transaction) -> set[int]:
+    """Collect sighash bytes from scriptSig and witness data."""
     sighashes: set[int] = set()
 
     for txin in tx.inputs:
@@ -65,6 +72,7 @@ def get_sighash_bytes(tx: Transaction) -> set[int]:
 
 
 def analyze(tx: Transaction) -> FingerprintReport:
+    """Run all registered detectors and summarize the transaction."""
     input_types = {input_type(inp) for inp in tx.inputs if not inp.is_coinbase}
     output_types = {output_type(output) for output in tx.outputs}
     sequence_hex = [f"0x{inp.sequence:08x}" for inp in tx.inputs if not inp.is_coinbase]

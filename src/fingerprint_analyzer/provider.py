@@ -1,3 +1,5 @@
+"""Fetch Bitcoin transaction and block data from an Electrs-compatible API."""
+
 import asyncio
 import json
 import urllib.error
@@ -12,21 +14,30 @@ class ProviderError(Exception):
 
 
 class TransactionNotFoundError(ProviderError):
+    """Raised when the requested transaction does not exist at the provider."""
+
     pass
 
 
 class TransactionProvider(ABC):
+    """Interface implemented by asynchronous transaction data providers."""
+
     @abstractmethod
     async def get_transaction(self, txid: str) -> Transaction:
+        """Fetch and parse a transaction by its transaction ID."""
         raise NotImplementedError
 
 
 class ElectrsProvider(TransactionProvider):
+    """HTTP client for transaction and block endpoints exposed by Electrs APIs."""
+
     def __init__(self, base_url: str = "https://mempool.space/api", timeout: int = 15):
+        """Set the API base URL and request timeout."""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     async def get_transaction(self, txid: str) -> Transaction:
+        """Fetch transaction JSON and convert it to the internal data model."""
         url = f"{self.base_url}/tx/{txid}"
         raw = await asyncio.to_thread(self._fetch_json, url)
         if not isinstance(raw, dict):
@@ -60,6 +71,7 @@ class ElectrsProvider(TransactionProvider):
         return spending_txids
 
     async def get_tip_height(self) -> int:
+        """Return the height of the most recently mined block."""
         raw = await asyncio.to_thread(
             self._fetch_text, f"{self.base_url}/blocks/tip/height"
         )
@@ -72,6 +84,7 @@ class ElectrsProvider(TransactionProvider):
         return height
 
     async def get_block_hash(self, height: int) -> str:
+        """Return the block hash at a given height."""
         raw = await asyncio.to_thread(
             self._fetch_text, f"{self.base_url}/block-height/{height}"
         )
@@ -81,6 +94,7 @@ class ElectrsProvider(TransactionProvider):
         return block_hash
 
     async def get_block_timestamp(self, block_hash: str) -> int:
+        """Return the Unix timestamp recorded for a block."""
         raw = await asyncio.to_thread(
             self._fetch_json, f"{self.base_url}/block/{block_hash}"
         )
@@ -89,6 +103,7 @@ class ElectrsProvider(TransactionProvider):
         return raw["timestamp"]
 
     async def get_block_txids(self, block_hash: str) -> list[str]:
+        """Return all transaction IDs included in a block."""
         raw = await asyncio.to_thread(
             self._fetch_json, f"{self.base_url}/block/{block_hash}/txids"
         )
@@ -99,6 +114,7 @@ class ElectrsProvider(TransactionProvider):
         return raw
 
     def _fetch_json(self, url: str) -> object:
+        """Fetch a URL and decode its response as JSON."""
         body = self._fetch_text(url)
         try:
             return json.loads(body)
@@ -106,6 +122,7 @@ class ElectrsProvider(TransactionProvider):
             raise ProviderError(f"invalid JSON response from {url}") from exc
 
     def _fetch_text(self, url: str) -> str:
+        """Fetch a URL as UTF-8 text and translate network errors to provider errors."""
         request = urllib.request.Request(
             url, headers={"User-Agent": "fingerprint-analyzer/0.1"}
         )
@@ -124,6 +141,7 @@ class ElectrsProvider(TransactionProvider):
             raise ProviderError(f"request failed: {exc}") from exc
 
     def _parse(self, raw: dict) -> Transaction:
+        """Convert a provider transaction object into typed transaction data."""
         inputs = []
         for vin in raw.get("vin", []):
             prevout = vin.get("prevout")

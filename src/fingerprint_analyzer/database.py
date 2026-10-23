@@ -1,3 +1,5 @@
+"""PostgreSQL storage for per-transaction fingerprints and block metadata."""
+
 from datetime import datetime
 
 from psycopg import Connection, connect, sql
@@ -10,16 +12,21 @@ BLOCKS_TABLE = "fingerprint_blocks"
 
 
 class FingerprintStore:
+    """Create the database schema and save analyzed blocks."""
+
     def __init__(self, database_url: str):
+        """Open a database connection and cache the registered feature names."""
         self.connection: Connection = connect(database_url, autocommit=True)
         self.fingerprint_names = [
             detector.fingerprint_name for detector in DETECTORS
         ]
 
     def close(self) -> None:
+        """Close the underlying PostgreSQL connection."""
         self.connection.close()
 
     def ensure_schema(self) -> None:
+        """Create the transaction and block tables if they do not exist."""
         with self.connection.transaction():
             self.connection.execute(
                 sql.SQL(
@@ -51,6 +58,7 @@ class FingerprintStore:
             )
 
     def get_latest_height(self) -> int | None:
+        """Return the newest stored block height, or ``None`` for an empty store."""
         row = self.connection.execute(
             sql.SQL("SELECT MAX(block_height) FROM {}").format(
                 sql.Identifier(BLOCKS_TABLE)
@@ -65,6 +73,7 @@ class FingerprintStore:
         timestamp: datetime,
         reports: list[FingerprintReport],
     ) -> None:
+        """Write block metadata and its transaction fingerprints atomically."""
         columns = [
             "txid",
             "block_height",

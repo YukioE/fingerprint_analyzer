@@ -1,3 +1,5 @@
+"""Read labeled transaction lists and create machine-learning feature datasets."""
+
 import asyncio
 import csv
 import re
@@ -26,22 +28,27 @@ MAX_CONCURRENCY = 64
 
 @dataclass(frozen=True)
 class TransactionRow:
+    """One transaction reference and its optional wallet label."""
+
     txid: str
     network: str
     wallet_label: str | None = None
 
 
 def _normalise_column(name: str) -> str:
+    """Normalize CSV header spelling so equivalent names match."""
     return re.sub(r"[\s-]+", "_", name.strip().lower())
 
 
 def _is_blank_row(row: dict[str, str | None]) -> bool:
+    """Check whether a CSV row contains only empty values."""
     return all(value is None or not value.strip() for value in row.values())
 
 
 def load_transaction_list(
     path: Path, *, require_label: bool
 ) -> list[TransactionRow]:
+    """Load and validate transaction IDs, networks, and optional wallet labels."""
     with path.open(newline="", encoding="utf-8-sig") as source:
         reader = csv.DictReader(source)
         if not reader.fieldnames:
@@ -94,6 +101,7 @@ def load_transaction_list(
 
 
 def fingerprint_features(report: FingerprintReport) -> dict[str, int]:
+    """Map detector results to 1, 0, or -1 when the result is unknown."""
     features: dict[str, int] = {}
     for name, value in report.fingerprints.items():
         if value is True:
@@ -106,6 +114,7 @@ def fingerprint_features(report: FingerprintReport) -> dict[str, int]:
 
 
 def feature_vector(report: FingerprintReport, feature_names: list[str]) -> list[int]:
+    """Return report features in the order expected by a trained classifier."""
     features = fingerprint_features(report)
     return [features.get(name, -1) for name in feature_names]
 
@@ -114,6 +123,7 @@ async def analyze_transaction_rows(
     rows: list[TransactionRow],
     mempool_url: str | None = None,
 ) -> list[tuple[TransactionRow, FingerprintReport]]:
+    """Fetch and analyze rows concurrently, skipping transactions that are missing."""
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
     base_urls = (
         {mempool_url}
@@ -123,6 +133,7 @@ async def analyze_transaction_rows(
     providers = {base_url: ElectrsProvider(base_url) for base_url in base_urls}
 
     async def analyze_row(row: TransactionRow) -> tuple[TransactionRow, FingerprintReport] | None:
+        """Analyze one row using its network-specific provider."""
         base_url = mempool_url or NETWORK_URLS[row.network]
         try:
             async with semaphore:
@@ -140,6 +151,7 @@ def write_feature_dataset(
     output: TextIO,
     reports: list[tuple[TransactionRow, FingerprintReport]],
 ) -> list[str]:
+    """Write labeled fingerprint rows as CSV and return the feature column names."""
     if not reports:
         raise ValueError("no transaction reports to write")
 

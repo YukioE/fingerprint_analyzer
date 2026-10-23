@@ -1,3 +1,5 @@
+"""Define command-line commands for transaction analysis and model workflows."""
+
 import argparse
 import asyncio
 import json
@@ -32,6 +34,7 @@ MODEL_NAMES = {
 
 
 def _bold(text: str) -> str:
+    """Wrap text in terminal bold formatting when color output is available."""
     if (
         sys.stdout.isatty()
         and not os.environ.get("NO_COLOR")
@@ -42,6 +45,7 @@ def _bold(text: str) -> str:
 
 
 def _mempool_url_argument(parser: argparse.ArgumentParser) -> None:
+    """Add the option used to override the default API endpoint."""
     parser.add_argument(
         "--mempool-url",
         help="base URL of an Electrs-compatible mempool API (overrides the network default)",
@@ -49,6 +53,7 @@ def _mempool_url_argument(parser: argparse.ArgumentParser) -> None:
 
 
 def _network_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add network selection and the optional API URL to a parser."""
     network_group = parser.add_mutually_exclusive_group()
     network_group.add_argument("--testnet", action="store_true", help="use Bitcoin testnet3")
     network_group.add_argument("--testnet4", action="store_true", help="use Bitcoin testnet4")
@@ -56,6 +61,7 @@ def _network_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for all supported commands."""
     parser = argparse.ArgumentParser(
         description="Analyze Bitcoin transaction fingerprints and identify wallets"
     )
@@ -121,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _provider(args) -> ElectrsProvider:
+    """Create a provider using the URL override or selected Bitcoin network."""
     if args.mempool_url:
         base_url = args.mempool_url
     elif args.testnet4:
@@ -133,11 +140,13 @@ def _provider(args) -> ElectrsProvider:
 
 
 async def _fetch_transactions(args):
+    """Fetch all transaction IDs provided to a transaction-oriented command."""
     provider = _provider(args)
     return await asyncio.gather(*(provider.get_transaction(txid) for txid in args.txid))
 
 
 async def _run_tx(args) -> int:
+    """Fetch transactions and print their fingerprint reports as JSON."""
     try:
         transactions = await _fetch_transactions(args)
         reports = [analyze(transaction) for transaction in transactions]
@@ -155,6 +164,7 @@ async def _run_tx(args) -> int:
 
 
 async def _run_dataset(args) -> int:
+    """Convert a labeled transaction CSV into a fingerprint feature CSV."""
     try:
         rows = load_transaction_list(args.input_csv, require_label=True)
         reports = await analyze_transaction_rows(rows, args.mempool_url)
@@ -173,6 +183,7 @@ async def _run_dataset(args) -> int:
 
 
 def _run_train() -> int:
+    """Train and print evaluation results for each supported classifier."""
     try:
         dataset_path = first_dataset()
         results, _, _ = train_models(dataset_path, mode="evaluate")
@@ -257,6 +268,7 @@ def _run_train() -> int:
             )
             for index, label in enumerate(labels):
                 metrics = report[label]
+                # Derive each one-vs-rest count from the confusion matrix.
                 true_positive = matrix[index][index]
                 false_negative = sum(matrix[index]) - true_positive
                 false_positive = (
@@ -326,6 +338,7 @@ def _model_reasons(
     features: list[int],
     feature_importances: dict[str, float] | None,
 ) -> str:
+    """Choose a short list of known features that explain a model prediction."""
     known = [
         (feature, value)
         for feature, value in zip(feature_names, features)
@@ -352,6 +365,7 @@ def _model_reasons(
 
 
 async def _run_identify(args) -> int:
+    """Classify each requested transaction using all trained models."""
     try:
         dataset_path = first_dataset()
         results, classifiers, feature_names = train_models(dataset_path, mode="identify")
@@ -432,6 +446,7 @@ async def _run_identify(args) -> int:
 
 
 async def _run_change(args) -> int:
+    """Identify likely change outputs by comparing spending wallet labels."""
     try:
         dataset_path = first_dataset()
         decision_tree, feature_names = train_classifier(
@@ -491,6 +506,7 @@ async def _run_change(args) -> int:
 
 
 async def _run_collect(args) -> int:
+    """Validate collector settings and persist confirmed transaction data."""
     if not args.database_url:
         print(
             "Error: provide --database-url or set DATABASE_URL",
@@ -528,6 +544,7 @@ async def _run_collect(args) -> int:
 
 
 def main() -> None:
+    """Parse command-line arguments and dispatch to the matching command."""
     args = build_parser().parse_args()
     if args.command in {"tx", "transaction"}:
         exit_code = asyncio.run(_run_tx(args))

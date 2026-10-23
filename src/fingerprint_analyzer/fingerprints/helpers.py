@@ -1,9 +1,12 @@
+"""Helpers for interpreting Bitcoin scripts and classifying input/output types."""
+
 from collections.abc import Iterator
 
 from ..model import Transaction, TxInput
 
 
 def script_bytes(value: str) -> bytes:
+    """Decode hexadecimal script data, returning empty bytes for invalid input."""
     try:
         return bytes.fromhex(value)
     except (TypeError, ValueError):
@@ -11,15 +14,18 @@ def script_bytes(value: str) -> bytes:
 
 
 def is_multisig_script(script: bytes) -> bool:
+    """Check whether a script ends with a standard CHECKMULTISIG opcode."""
     return bool(script) and script[-1] in {0xAE, 0xAF}
 
 
 def last_push(script: bytes) -> bytes:
+    """Return the final data push from a script, or empty bytes if none exists."""
     pushes = script_pushes(script)
     return pushes[-1] if pushes else b""
 
 
 def script_pushes(script: bytes) -> list[bytes]:
+    """Read pushed data items from a script until an unsupported opcode is met."""
     pushes: list[bytes] = []
     index = 0
 
@@ -55,6 +61,7 @@ def script_pushes(script: bytes) -> list[bytes]:
 
 
 def is_ecdsa_signature(raw: bytes) -> bool:
+    """Check the basic DER structure of an ECDSA signature with sighash byte."""
     if len(raw) < 9 or raw[0] != 0x30 or raw[1] != len(raw) - 3:
         return False
 
@@ -72,6 +79,7 @@ def is_ecdsa_signature(raw: bytes) -> bool:
 
 
 def input_type(inp: TxInput) -> str:
+    """Classify a spent output using its script and available spending data."""
     if not inp.prevout:
         return "unknown"
 
@@ -114,6 +122,7 @@ def input_type(inp: TxInput) -> str:
 
 
 def output_type(output) -> str:
+    """Group an output into its address/script family for fingerprinting."""
     script_type = output.scriptpubkey_type.lower()
     script = script_bytes(output.scriptpubkey)
 
@@ -133,6 +142,7 @@ def output_type(output) -> str:
 
 
 def signature_candidates(tx: Transaction) -> Iterator[bytes]:
+    """Yield data pushes from input witness and scriptSig fields."""
     for inp in tx.inputs:
         yield from (script_bytes(item) for item in (inp.witness or []))
         if inp.scriptsig:
@@ -140,6 +150,7 @@ def signature_candidates(tx: Transaction) -> Iterator[bytes]:
 
 
 def public_keys(tx: Transaction) -> Iterator[bytes]:
+    """Yield compressed or uncompressed public keys found in transaction data."""
     for candidate in signature_candidates(tx):
         if len(candidate) in {33, 65} and candidate[0] in {2, 3, 4}:
             yield candidate

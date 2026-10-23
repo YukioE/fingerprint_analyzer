@@ -1,3 +1,5 @@
+"""Collect confirmed transactions and persist their fingerprints by block."""
+
 import asyncio
 import sys
 from datetime import datetime, timezone
@@ -16,6 +18,7 @@ async def collect_forever(
     poll_interval: float,
     block_interval: int = 1,
 ) -> None:
+    """Continuously analyze blocks, resuming after the latest stored height."""
     if block_interval <= 0:
         raise ValueError("block_interval must be greater than zero")
 
@@ -33,6 +36,7 @@ async def collect_forever(
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def analyze_tx(txid: str) -> FingerprintReport:
+        """Fetch and analyze one transaction while respecting the concurrency limit."""
         async with semaphore:
             transaction = await provider.get_transaction(txid)
         return analyze(transaction)
@@ -40,6 +44,7 @@ async def collect_forever(
     while True:
         tip_height = await provider.get_tip_height()
         while next_height <= tip_height:
+            # Save a complete block before advancing so a failed block can be retried.
             block_hash = await provider.get_block_hash(next_height)
             timestamp = datetime.fromtimestamp(
                 await provider.get_block_timestamp(block_hash), tz=timezone.utc

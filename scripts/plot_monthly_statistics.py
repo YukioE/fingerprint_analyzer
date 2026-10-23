@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Plot monthly transaction fingerprint and input-type statistics."""
+"""
+Create plots from transaction fingerprint data stored in PostgreSQL.
+calculates monthly average of fingerprint occurrence in transactions
+"""
 
 import argparse
 import os
@@ -27,6 +30,7 @@ BOOLEAN_FEATURES = (
 
 
 def _available_columns(connection):
+    """Return the transaction table's columns for version-aware plotting."""
     rows = connection.execute(
         """
         SELECT column_name
@@ -115,6 +119,7 @@ def _plot_percentages(axis, months, monthly, features, ylabel, show_legend=True)
 
 
 def _save_plots(output_dir, months, monthly, input_types, plt):
+    """Build and save feature, input-type, and sample-count charts."""
     output_dir.mkdir(parents=True, exist_ok=True)
     plots = []
 
@@ -195,6 +200,7 @@ def _save_plots(output_dir, months, monthly, input_types, plt):
 
 
 def main():
+    """Load monthly aggregates and write their plots to the selected directory."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--database-url",

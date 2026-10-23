@@ -1,8 +1,12 @@
+"""Small data classes representing the transaction fields used by the analyzer."""
+
 from dataclasses import dataclass
 
 
 @dataclass
 class PrevOut:
+    """The previous output referenced by a transaction input."""
+
     scriptpubkey: str
     scriptpubkey_asm: str
     scriptpubkey_type: str
@@ -12,6 +16,8 @@ class PrevOut:
 
 @dataclass
 class TxInput:
+    """An input, including its unlocking data and referenced previous output."""
+
     txid: str
     vout: int
     sequence: int
@@ -24,6 +30,8 @@ class TxInput:
 
 @dataclass
 class TxOutput:
+    """An output's value and locking-script information."""
+
     value: int
     scriptpubkey: str
     scriptpubkey_asm: str
@@ -33,6 +41,8 @@ class TxOutput:
 
 @dataclass
 class TxStatus:
+    """Confirmation status and optional block metadata."""
+
     confirmed: bool
     block_height: int | None = None
     block_hash: str | None = None
@@ -41,6 +51,8 @@ class TxStatus:
 
 @dataclass
 class Transaction:
+    """The transaction fields needed for fingerprint analysis."""
+
     txid: str
     version: int
     locktime: int
@@ -54,7 +66,7 @@ class Transaction:
 
     @property
     def vbytes(self) -> int:
+        """Return virtual size, calculated from weight when it is available."""
         if self.weight:
             return (self.weight + 3) // 4
         return self.size
-

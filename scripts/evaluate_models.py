@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot classifier behavior and feature importance on a deterministic holdout."""
+"""Evaluate classifier behavior and feature importance on a deterministic holdout."""
 
 import argparse
 import sys
@@ -19,6 +19,7 @@ PLOT_DPI = 300
 
 
 def main() -> int:
+    """Train evaluation models, create plots, and report the best holdout scores."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "dataset",
