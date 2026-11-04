@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -26,7 +27,13 @@ from .provider import ElectrsProvider, ProviderError
 MODEL_NAMES = {
     "decision-tree": "Decision Tree",
     "random-forest": "Random Forest",
+    "extra-trees": "Extra Trees",
+    "gradient-boosting": "Gradient Boosting",
+    "logistic-regression": "Logistic Regression",
+    "svm-linear": "Linear SVM",
+    "svm-rbf": "RBF SVM",
     "knn": "K-Nearest Neighbors",
+    "gaussian-nb": "Gaussian Naive Bayes",
 }
 
 
@@ -373,6 +380,24 @@ def _model_reasons(
     return "no usable signal"
 
 
+def _classifier_scores(classifier, features: list[int]) -> list[float]:
+    """Return class scores, normalizing decision values for display when needed."""
+    if hasattr(classifier, "predict_proba"):
+        return list(classifier.predict_proba([features])[0])
+
+    decision_values = classifier.decision_function([features])[0]
+    if len(classifier.classes_) == 2:
+        decision_values = [-float(decision_values), float(decision_values)]
+    else:
+        decision_values = [float(value) for value in decision_values]
+
+    exponentials = [
+        math.exp(value - max(decision_values)) for value in decision_values
+    ]
+    total = sum(exponentials)
+    return [value / total for value in exponentials]
+
+
 async def _run_identify(args) -> int:
     """Classify transactions with the decision tree and show model comparisons."""
     try:
@@ -402,7 +427,7 @@ async def _run_identify(args) -> int:
         features = feature_vector(report, feature_names)
         model_predictions = {}
         for algorithm, classifier in classifiers.items():
-            probabilities = classifier.predict_proba([features])[0]
+            probabilities = _classifier_scores(classifier, features)
             scores = sorted(
                 enumerate(probabilities),
                 key=lambda item: item[1],

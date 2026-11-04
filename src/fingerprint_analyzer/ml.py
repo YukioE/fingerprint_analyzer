@@ -6,7 +6,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Literal
 
-from sklearn.ensemble import RandomForestClassifier
+import numpy as np
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    GradientBoostingClassifier,
+    RandomForestClassifier,
+)
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -17,13 +23,27 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
 from .fingerprints import DETECTORS
 
 LABEL_COLUMN = "wallet"
 METADATA_COLUMNS = {"txid", LABEL_COLUMN}
-ALGORITHMS = ("decision-tree", "random-forest", "knn")
+ALGORITHMS = (
+    "decision-tree",
+    "random-forest",
+    "extra-trees",
+    "gradient-boosting",
+    "logistic-regression",
+    "svm-linear",
+    "svm-rbf",
+    "knn",
+    "gaussian-nb",
+)
 TrainingMode = Literal["evaluate", "identify"]
 DATA_DIRECTORY = Path(__file__).parent / "data"
 ANALYZER_FEATURES = frozenset(detector.fingerprint_name for detector in DETECTORS)
@@ -35,6 +55,13 @@ def first_dataset() -> Path:
     if not datasets:
         raise ValueError(f"No CSV training dataset found in {DATA_DIRECTORY}")
     return datasets[0]
+
+
+def _unknowns_as_nan(features):
+    """Represent unknown fingerprint values as missing values for supported models."""
+    values = np.asarray(features, dtype=float)
+    values[values == -1] = np.nan
+    return values
 
 
 def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[str]]:
@@ -89,13 +116,43 @@ def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[s
 def _new_classifier(algorithm: str, training_size: int):
     """Create a configured classifier, adapting KNN to the available samples."""
     if algorithm == "decision-tree":
-        return DecisionTreeClassifier(random_state=22)
+        return make_pipeline(
+            FunctionTransformer(_unknowns_as_nan),
+            DecisionTreeClassifier(random_state=22),
+        )
     if algorithm == "random-forest":
-        return RandomForestClassifier(n_estimators=100, random_state=22)
+        return make_pipeline(
+            FunctionTransformer(_unknowns_as_nan),
+            RandomForestClassifier(n_estimators=100, random_state=22),
+        )
+    if algorithm == "extra-trees":
+        return make_pipeline(
+            FunctionTransformer(_unknowns_as_nan),
+            ExtraTreesClassifier(n_estimators=100, random_state=22),
+        )
+    if algorithm == "gradient-boosting":
+        return GradientBoostingClassifier(random_state=22)
     if algorithm == "knn":
         if training_size < 1:
             raise ValueError("KNN requires at least one training sample")
         return KNeighborsClassifier(n_neighbors=min(5, training_size))
+    if algorithm == "logistic-regression":
+        return make_pipeline(
+            StandardScaler(),
+            LogisticRegression(max_iter=1000, random_state=22),
+        )
+    if algorithm == "svm-linear":
+        return make_pipeline(
+            StandardScaler(),
+            SVC(kernel="linear", random_state=22),
+        )
+    if algorithm == "svm-rbf":
+        return make_pipeline(
+            StandardScaler(),
+            SVC(kernel="rbf", random_state=22),
+        )
+    if algorithm == "gaussian-nb":
+        return GaussianNB()
     raise ValueError(f"Unsupported algorithm: {algorithm}")
 
 
@@ -243,10 +300,19 @@ def train_models(
             "evaluation": evaluation,
         }
 
-        if classifier is not None and hasattr(classifier, "feature_importances_"):
+        importance_model = (
+            classifier[-1] if classifier is not None and hasattr(classifier, "steps")
+            else classifier
+        )
+        if importance_model is not None and hasattr(
+            importance_model, "feature_importances_"
+        ):
             result["feature_importances"] = dict(
                 sorted(
-                    zip(feature_names, map(float, classifier.feature_importances_)),
+                    zip(
+                        feature_names,
+                        map(float, importance_model.feature_importances_),
+                    ),
                     key=lambda item: item[1],
                     reverse=True,
                 )
