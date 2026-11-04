@@ -63,6 +63,8 @@ async def identify_transaction_changes(
     provider: ElectrsProvider,
     classifiers: Mapping[str, object],
     feature_names: list[str],
+    *,
+    request_semaphore: asyncio.Semaphore | None = None,
 ) -> ChangeDetectionResult:
     """Identify a transaction and check which spent outputs return to its wallet.
 
@@ -70,10 +72,15 @@ async def identify_transaction_changes(
     from the provider and classified with the same decision-tree model as the
     original transaction. An output is considered change when both
     transactions have the same identified wallet label. This is a heuristic;
-    transactions without a prediction cannot be assessed.
+    transactions without a prediction cannot be assessed. An optional semaphore
+    can cap concurrent provider requests when processing multiple transactions.
     """
     wallet_label = identify_transaction(transaction, classifiers, feature_names)
-    spending_txids = await provider.get_output_spends(transaction.txid)
+    if request_semaphore is None:
+        spending_txids = await provider.get_output_spends(transaction.txid)
+    else:
+        async with request_semaphore:
+            spending_txids = await provider.get_output_spends(transaction.txid)
     if len(spending_txids) != len(transaction.outputs):
         raise ValueError(
             f"Expected spend information for {len(transaction.outputs)} outputs "
@@ -83,8 +90,15 @@ async def identify_transaction_changes(
     unique_spending_txids = list(
         dict.fromkeys(txid for txid in spending_txids if txid is not None)
     )
+
+    async def fetch_spending_transaction(txid: str) -> Transaction:
+        if request_semaphore is None:
+            return await provider.get_transaction(txid)
+        async with request_semaphore:
+            return await provider.get_transaction(txid)
+
     spending_transactions = await asyncio.gather(
-        *(provider.get_transaction(txid) for txid in unique_spending_txids)
+        *(fetch_spending_transaction(txid) for txid in unique_spending_txids)
     )
     spending_labels = {
         txid: identify_transaction(spending_transaction, classifiers, feature_names)

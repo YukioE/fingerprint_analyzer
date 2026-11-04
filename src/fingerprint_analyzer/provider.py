@@ -5,8 +5,25 @@ import json
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import TypeVar
 
 from .model import PrevOut, Transaction, TxInput, TxOutput, TxStatus
+
+HTTP_WORKER_COUNT = 128
+_HTTP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=HTTP_WORKER_COUNT,
+    thread_name_prefix="fingerprint-analyzer-http",
+)
+
+T = TypeVar("T")
+
+
+async def _run_http_request(function: Callable[..., T], *args: object) -> T:
+    return await asyncio.get_running_loop().run_in_executor(
+        _HTTP_EXECUTOR, function, *args
+    )
 
 
 class ProviderError(Exception):
@@ -31,23 +48,52 @@ class TransactionProvider(ABC):
 class ElectrsProvider(TransactionProvider):
     """HTTP client for transaction and block endpoints exposed by Electrs APIs."""
 
-    def __init__(self, base_url: str = "https://mempool.space/api", timeout: int = 15):
+    def __init__(
+        self,
+        base_url: str = "https://mempool.space/api",
+        timeout: int = 15,
+        *,
+        cache_responses: bool = False,
+    ):
         """Set the API base URL and request timeout."""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.cache_responses = cache_responses
+        self._transaction_requests: dict[str, asyncio.Task[Transaction]] = {}
+        self._output_spends_requests: dict[
+            str, asyncio.Task[list[str | None]]
+        ] = {}
 
     async def get_transaction(self, txid: str) -> Transaction:
         """Fetch transaction JSON and convert it to the internal data model."""
+        if self.cache_responses:
+            return await self._cached_request(
+                self._transaction_requests,
+                txid,
+                lambda: self._fetch_transaction(txid),
+            )
+        return await self._fetch_transaction(txid)
+
+    async def _fetch_transaction(self, txid: str) -> Transaction:
         url = f"{self.base_url}/tx/{txid}"
-        raw = await asyncio.to_thread(self._fetch_json, url)
+        raw = await _run_http_request(self._fetch_json, url)
         if not isinstance(raw, dict):
             raise ProviderError(f"invalid transaction response for {txid}")
         return self._parse(raw)
 
     async def get_output_spends(self, txid: str) -> list[str | None]:
         """Return the spending transaction ID for each output, if it is spent."""
+        if self.cache_responses:
+            return await self._cached_request(
+                self._output_spends_requests,
+                txid,
+                lambda: self._fetch_output_spends(txid),
+            )
+        return await self._fetch_output_spends(txid)
+
+    async def _fetch_output_spends(self, txid: str) -> list[str | None]:
         url = f"{self.base_url}/tx/{txid}/outspends"
-        raw = await asyncio.to_thread(self._fetch_json, url)
+        raw = await _run_http_request(self._fetch_json, url)
         if not isinstance(raw, list):
             raise ProviderError(f"invalid output-spends response for {txid}")
 
@@ -70,9 +116,31 @@ class ElectrsProvider(TransactionProvider):
 
         return spending_txids
 
+    async def _cached_request(
+        self,
+        cache: dict[str, asyncio.Task[T]],
+        key: str,
+        fetch: Callable[[], Awaitable[T]],
+    ) -> T:
+        """Share an in-flight request and retain its successful result."""
+        task = cache.get(key)
+        if task is None:
+            task = asyncio.create_task(fetch())
+            cache[key] = task
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done() and cache.get(key) is task:
+                del cache[key]
+            raise
+        except Exception:
+            if cache.get(key) is task:
+                del cache[key]
+            raise
+
     async def get_tip_height(self) -> int:
         """Return the height of the most recently mined block."""
-        raw = await asyncio.to_thread(
+        raw = await _run_http_request(
             self._fetch_text, f"{self.base_url}/blocks/tip/height"
         )
         try:
@@ -85,7 +153,7 @@ class ElectrsProvider(TransactionProvider):
 
     async def get_block_hash(self, height: int) -> str:
         """Return the block hash at a given height."""
-        raw = await asyncio.to_thread(
+        raw = await _run_http_request(
             self._fetch_text, f"{self.base_url}/block-height/{height}"
         )
         block_hash = raw.strip()
@@ -95,7 +163,7 @@ class ElectrsProvider(TransactionProvider):
 
     async def get_block_timestamp(self, block_hash: str) -> int:
         """Return the Unix timestamp recorded for a block."""
-        raw = await asyncio.to_thread(
+        raw = await _run_http_request(
             self._fetch_json, f"{self.base_url}/block/{block_hash}"
         )
         if not isinstance(raw, dict) or not isinstance(raw.get("timestamp"), int):
@@ -104,7 +172,7 @@ class ElectrsProvider(TransactionProvider):
 
     async def get_block_txids(self, block_hash: str) -> list[str]:
         """Return all transaction IDs included in a block."""
-        raw = await asyncio.to_thread(
+        raw = await _run_http_request(
             self._fetch_json, f"{self.base_url}/block/{block_hash}/txids"
         )
         if not isinstance(raw, list) or not raw or any(
