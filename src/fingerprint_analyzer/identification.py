@@ -29,14 +29,15 @@ class ChangeDetectionResult:
     output_spends: list[OutputSpendIdentification]
 
 
-def _decision_tree_label(
+def _classifier_label(
     feature_values: list[int],
     classifiers: Mapping[str, object],
+    classifier_name: str,
 ) -> str | None:
-    """Return the decision-tree prediction from a trained classifier set."""
-    classifier = classifiers.get("decision-tree")
+    """Return a wallet prediction from the selected trained classifier."""
+    classifier = classifiers.get(classifier_name)
     if classifier is None:
-        raise ValueError("A trained decision-tree classifier is required")
+        raise ValueError(f"A trained {classifier_name!r} classifier is required")
 
     predicted_label = getattr(classifier, "predict")([feature_values])[0]
     return str(predicted_label)
@@ -46,16 +47,18 @@ def identify_transaction(
     transaction: Transaction,
     classifiers: Mapping[str, object],
     feature_names: list[str],
+    *,
+    classifier_name: str = "decision-tree",
 ) -> str | None:
-    """Analyze a transaction and identify its wallet with the decision tree.
+    """Analyze a transaction and identify its wallet with the selected model.
 
     The transaction is first converted into the requested feature order. Each
-    feature is passed to the trained decision-tree classifier, which predicts
-    a wallet label.
+    feature is passed to the selected trained classifier, which predicts a
+    wallet label.
     """
     report = analyze(transaction)
     ordered_features = feature_vector(report, feature_names)
-    return _decision_tree_label(ordered_features, classifiers)
+    return _classifier_label(ordered_features, classifiers, classifier_name)
 
 
 async def identify_transaction_changes(
@@ -65,17 +68,20 @@ async def identify_transaction_changes(
     feature_names: list[str],
     *,
     request_semaphore: asyncio.Semaphore | None = None,
+    classifier_name: str = "decision-tree",
 ) -> ChangeDetectionResult:
     """Identify a transaction and check which spent outputs return to its wallet.
 
     For every spent output, the corresponding spending transaction is fetched
-    from the provider and classified with the same decision-tree model as the
-    original transaction. An output is considered change when both
-    transactions have the same identified wallet label. This is a heuristic;
-    transactions without a prediction cannot be assessed. An optional semaphore
-    can cap concurrent provider requests when processing multiple transactions.
+    from the provider and classified with the same selected model as the original
+    transaction. An output is considered change when both transactions have the
+    same identified wallet label. This is a heuristic; transactions without a
+    prediction cannot be assessed. An optional semaphore can cap concurrent
+    provider requests when processing multiple transactions.
     """
-    wallet_label = identify_transaction(transaction, classifiers, feature_names)
+    wallet_label = identify_transaction(
+        transaction, classifiers, feature_names, classifier_name=classifier_name
+    )
     if request_semaphore is None:
         spending_txids = await provider.get_output_spends(transaction.txid)
     else:
@@ -101,7 +107,12 @@ async def identify_transaction_changes(
         *(fetch_spending_transaction(txid) for txid in unique_spending_txids)
     )
     spending_labels = {
-        txid: identify_transaction(spending_transaction, classifiers, feature_names)
+        txid: identify_transaction(
+            spending_transaction,
+            classifiers,
+            feature_names,
+            classifier_name=classifier_name,
+        )
         for txid, spending_transaction in zip(
             unique_spending_txids, spending_transactions
         )
@@ -138,4 +149,4 @@ def identify_fingerprint_features(
     classifiers: Mapping[str, object],
 ) -> str | None:
     """Identify a wallet from an ordered feature vector using the decision tree."""
-    return _decision_tree_label(feature_values, classifiers)
+    return _classifier_label(feature_values, classifiers, "decision-tree")
