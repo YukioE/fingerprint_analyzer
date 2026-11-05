@@ -9,13 +9,40 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
+from fingerprint_analyzer.fingerprints.helpers import input_type, output_type
 from fingerprint_analyzer.identification import identify_transaction_changes
 from fingerprint_analyzer.ml import first_dataset, train_classifier
+from fingerprint_analyzer.model import Transaction
 from fingerprint_analyzer.provider import ElectrsProvider, ProviderError
 
 MEMPOOL_API_URL = "http://100.126.92.24:3000"
 MAX_CONCURRENT_REQUESTS = 128
-EVALUATION_INTERVAL = 1_000
+EVALUATION_INTERVAL = 1_0
+# Treat outputs divisible by 1,000 satoshis as round payment amounts.
+ROUND_AMOUNT_INCREMENT = 1_000
+
+INPUT_TYPE_TO_OUTPUT_FAMILY = {
+    "p2pk": "base58",
+    "p2pkh": "base58",
+    "p2sh_all": "base58",
+    "p2sh_multisig": "base58",
+    "p2sh_p2wpkh": "base58",
+    "p2sh_p2wsh": "base58",
+    "p2sh_unknown": "base58",
+    "p2tr": "bech32m",
+    "p2wpkh": "bech32",
+    "p2wsh_all": "bech32",
+    "p2wsh_multisig": "bech32",
+    "p2wsh_unknown": "bech32",
+}
+
+HEURISTIC_NAMES = (
+    "Input/output type match",
+    "Non-round amount",
+    "Optimal change (UIH)",
+    "Universal heuristics (majority)",
+    "Wallet fingerprinting",
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +59,58 @@ def score_prediction(
     if candidate_count == 0 or candidate_count == len(predictions):
         return False, False
     return True, candidate_count == 1 and predictions[change_output_index]
+
+
+def universal_predictions(transaction: Transaction) -> dict[str, list[bool]]:
+    """Return one candidate-output vector per universal change heuristic."""
+    input_families = {
+        INPUT_TYPE_TO_OUTPUT_FAMILY[type_name]
+        for txin in transaction.inputs
+        if not txin.is_coinbase
+        if (type_name := input_type(txin)) in INPUT_TYPE_TO_OUTPUT_FAMILY
+    }
+    output_families = [output_type(output) for output in transaction.outputs]
+
+    type_match = [
+        family in input_families and family not in {"op_return", "unknown"}
+        for family in output_families
+    ]
+    non_round_amount = [
+        output.value % ROUND_AMOUNT_INCREMENT != 0
+        and family != "op_return"
+        for output, family in zip(transaction.outputs, output_families)
+    ]
+
+    input_values = [
+        txin.prevout.value
+        for txin in transaction.inputs
+        if not txin.is_coinbase and txin.prevout is not None
+    ]
+    non_coinbase_inputs = [txin for txin in transaction.inputs if not txin.is_coinbase]
+    has_complete_input_values = (
+        len(non_coinbase_inputs) >= 2
+        and len(input_values) == len(non_coinbase_inputs)
+    )
+    optimal_change = [False] * len(transaction.outputs)
+    if has_complete_input_values:
+        smallest_input = min(input_values)
+        if transaction.fee is not None:
+            optimal_change = [
+                output.value + transaction.fee < smallest_input
+                and family != "op_return"
+                for output, family in zip(transaction.outputs, output_families)
+            ]
+
+    heuristics = {
+        HEURISTIC_NAMES[0]: type_match,
+        HEURISTIC_NAMES[1]: non_round_amount,
+        HEURISTIC_NAMES[2]: optimal_change,
+    }
+    heuristics[HEURISTIC_NAMES[3]] = [
+        sum(predictions[index] for predictions in heuristics.values()) >= 2
+        for index in range(len(transaction.outputs))
+    ]
+    return heuristics
 
 
 def iter_ground_truth(path: Path) -> Iterator[GroundTruth]:
@@ -64,7 +143,12 @@ async def evaluate_one(
     classifiers: dict[str, object],
     feature_names: list[str],
     request_semaphore: asyncio.Semaphore,
-) -> tuple[GroundTruth, list[bool] | None, str | None]:
+) -> tuple[
+    GroundTruth,
+    list[bool] | None,
+    dict[str, list[bool]] | None,
+    str | None,
+]:
     """Fetch and assess one transaction; each output's prediction is a bool."""
     try:
         async with request_semaphore:
@@ -72,6 +156,7 @@ async def evaluate_one(
         if ground_truth.change_output_index >= len(transaction.outputs):
             return (
                 ground_truth,
+                None,
                 None,
                 f"change output index {ground_truth.change_output_index} "
                 f"outside {len(transaction.outputs)} transaction outputs",
@@ -87,43 +172,37 @@ async def evaluate_one(
         return (
             ground_truth,
             [output.is_change is True for output in result.output_spends],
+            universal_predictions(transaction),
             None,
         )
     except (ProviderError, ValueError) as exc:
-        return ground_truth, None, str(exc)
+        return ground_truth, None, None, str(exc)
 
 
 def print_evaluation(
     completed: int,
     errors_count: int,
-    scored_transactions: int,
-    correct_transactions: int,
+    statistics: dict[str, dict[str, int]],
     *,
-    final: bool = False,
+    overwrite: bool = False,
 ) -> None:
-    is_terminal = sys.stdout.isatty()
-    if not is_terminal and not final:
-        return
-
     evaluated = completed - errors_count
-    scored_percentage = (
-        f"{scored_transactions / evaluated * 100:.2f}%" if evaluated else "n/a"
-    )
-    correct_percentage = (
-        f"{correct_transactions / scored_transactions * 100:.2f}%"
-        if scored_transactions
-        else "n/a"
-    )
-    report = (
-        f"Scored/evaluated: {scored_percentage} "
-        f"({scored_transactions}/{evaluated}) | "
-        f"Correct/scored: {correct_percentage} "
-        f"({correct_transactions}/{scored_transactions})"
-    )
-    if is_terminal:
-        sys.stdout.write(f"\r\033[2K{report}")
-        if final:
-            sys.stdout.write("\n")
+    lines = [
+        f"Evaluation progress: {completed} completed, {errors_count} skipped",
+        f"{'Detector':<36} {'Scored/evaluated':>18} {'Correct/scored':>17}",
+    ]
+    for name in HEURISTIC_NAMES:
+        scored = statistics[name]["scored"]
+        correct = statistics[name]["correct"]
+        coverage = f"{scored / evaluated * 100:.2f}%" if evaluated else "n/a"
+        accuracy = f"{correct / scored * 100:.2f}%" if scored else "n/a"
+        lines.append(
+            f"{name:<36} {coverage:>8} ({scored}/{evaluated}) "
+            f"{accuracy:>7} ({correct}/{scored})"
+        )
+    report = "\n".join(lines)
+    if overwrite and sys.stdout.isatty():
+        sys.stdout.write(f"\033[{len(lines)}F\033[J{report}\n")
         sys.stdout.flush()
     else:
         print(report, flush=True)
@@ -148,8 +227,9 @@ async def main() -> None:
     )
     ground_truth_rows = iter_ground_truth(args.ground_truth)
     completed_count = errors_count = 0
-    scored_transactions = correct_transactions = 0
+    statistics = {name: {"scored": 0, "correct": 0} for name in HEURISTIC_NAMES}
     errors = []
+    has_progress_report = False
     while True:
         batch = list(itertools.islice(ground_truth_rows, MAX_CONCURRENT_REQUESTS))
         if not batch:
@@ -163,7 +243,7 @@ async def main() -> None:
             for row in batch
         ]
         for completed in asyncio.as_completed(tasks):
-            ground_truth, predictions, error = await completed
+            ground_truth, predictions, heuristic_predictions, error = await completed
             completed_count += 1
             if error is not None:
                 errors_count += 1
@@ -171,20 +251,27 @@ async def main() -> None:
                     errors.append((ground_truth.txid, error))
             else:
                 assert predictions is not None
-                scored, correct = score_prediction(
-                    predictions, ground_truth.change_output_index
-                )
-                if scored:
-                    scored_transactions += 1
-                    correct_transactions += int(correct)
+                assert heuristic_predictions is not None
+                all_predictions = {
+                    **heuristic_predictions,
+                    HEURISTIC_NAMES[4]: predictions,
+                }
+                for name, candidates in all_predictions.items():
+                    scored, correct = score_prediction(
+                        candidates, ground_truth.change_output_index
+                    )
+                    if scored:
+                        statistics[name]["scored"] += 1
+                        statistics[name]["correct"] += int(correct)
 
             if completed_count % EVALUATION_INTERVAL == 0:
                 print_evaluation(
                     completed_count,
                     errors_count,
-                    scored_transactions,
-                    correct_transactions,
+                    statistics,
+                    overwrite=has_progress_report,
                 )
+                has_progress_report = True
 
     if completed_count == 0:
         raise ValueError(f"No ground-truth rows found in {args.ground_truth}")
@@ -192,9 +279,8 @@ async def main() -> None:
     print_evaluation(
         completed_count,
         errors_count,
-        scored_transactions,
-        correct_transactions,
-        final=True,
+        statistics,
+        overwrite=has_progress_report,
     )
 
     for txid, error in errors:
