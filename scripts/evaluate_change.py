@@ -5,7 +5,6 @@ import asyncio
 import csv
 import itertools
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -15,15 +14,24 @@ from fingerprint_analyzer.ml import first_dataset, train_classifier
 from fingerprint_analyzer.provider import ElectrsProvider, ProviderError
 
 MEMPOOL_API_URL = "http://100.126.92.24:3000"
-MAX_CONCURRENT_REQUESTS = 1024
-TICKER_INTERVAL = 1_00
-EVALUATION_INTERVAL = 10_000
+MAX_CONCURRENT_REQUESTS = 128
+EVALUATION_INTERVAL = 1_000
 
 
 @dataclass(frozen=True)
 class GroundTruth:
     txid: str
     change_output_index: int
+
+
+def score_prediction(
+    predictions: list[bool], change_output_index: int
+) -> tuple[bool, bool]:
+    """Return whether a transaction was scored and whether it was an exact match."""
+    candidate_count = sum(predictions)
+    if candidate_count == 0 or candidate_count == len(predictions):
+        return False, False
+    return True, candidate_count == 1 and predictions[change_output_index]
 
 
 def iter_ground_truth(path: Path) -> Iterator[GroundTruth]:
@@ -88,38 +96,37 @@ async def evaluate_one(
 def print_evaluation(
     completed: int,
     errors_count: int,
-    correct: int,
-    incorrect: int,
-    abstained: int,
-    elapsed: float,
+    scored_transactions: int,
+    correct_transactions: int,
+    *,
+    final: bool = False,
 ) -> None:
-    evaluated = completed - errors_count
-    unique_guesses = correct + incorrect
-    coverage = unique_guesses / evaluated if evaluated else 0.0
-    throughput = evaluated / elapsed if elapsed else 0.0
+    is_terminal = sys.stdout.isatty()
+    if not is_terminal and not final:
+        return
 
-    print(f"\nEvaluation after {completed:,} transactions")
-    print(f"Transactions evaluated: {evaluated}/{completed}")
-    print(f"Transactions skipped: {errors_count}")
-    print(
-        f"Unique predictions: correct={correct}, "
-        f"incorrect={incorrect}, abstained={abstained}"
+    evaluated = completed - errors_count
+    scored_percentage = (
+        f"{scored_transactions / evaluated * 100:.2f}%" if evaluated else "n/a"
     )
-    print(
-        f"Coverage: {coverage:.4f} "
-        f"({unique_guesses}/{evaluated} evaluated transactions)"
+    correct_percentage = (
+        f"{correct_transactions / scored_transactions * 100:.2f}%"
+        if scored_transactions
+        else "n/a"
     )
-    print(
-        f"True positive rate (TPR): {correct / unique_guesses:.4f}"
-        if unique_guesses
-        else "True positive rate (TPR): n/a (no unique predictions)"
+    report = (
+        f"Scored/evaluated: {scored_percentage} "
+        f"({scored_transactions}/{evaluated}) | "
+        f"Correct/scored: {correct_percentage} "
+        f"({correct_transactions}/{scored_transactions})"
     )
-    print(
-        f"False positive rate (FPR): {incorrect / unique_guesses:.4f}"
-        if unique_guesses
-        else "False positive rate (FPR): n/a (no unique predictions)"
-    )
-    print(f"Elapsed: {elapsed:.1f}s ({throughput:.2f} transactions/s)")
+    if is_terminal:
+        sys.stdout.write(f"\r\033[2K{report}")
+        if final:
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+    else:
+        print(report, flush=True)
 
 
 async def main() -> None:
@@ -134,18 +141,14 @@ async def main() -> None:
     request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
     print(f"Ground truth: {args.ground_truth}")
-    print("Rows requested: all")
     print(f"Fingerprint dataset: {dataset_path}")
     print(
         f"API: {MEMPOOL_API_URL}; "
         f"max concurrent requests: {MAX_CONCURRENT_REQUESTS}"
     )
-    print("Unspent or unclassified outputs are treated as negative predictions.")
-
-    started = time.perf_counter()
     ground_truth_rows = iter_ground_truth(args.ground_truth)
     completed_count = errors_count = 0
-    correct = incorrect = abstained = 0
+    scored_transactions = correct_transactions = 0
     errors = []
     while True:
         batch = list(itertools.islice(ground_truth_rows, MAX_CONCURRENT_REQUESTS))
@@ -168,48 +171,31 @@ async def main() -> None:
                     errors.append((ground_truth.txid, error))
             else:
                 assert predictions is not None
-                candidates = [
-                    index
-                    for index, predicted_change in enumerate(predictions)
-                    if predicted_change
-                ]
-                if len(candidates) != 1:
-                    abstained += 1
-                elif candidates[0] == ground_truth.change_output_index:
-                    correct += 1
-                else:
-                    incorrect += 1
-
-            if completed_count % TICKER_INTERVAL == 0:
-                print(
-                    f"\rCompleted {completed_count:,} transactions",
-                    end="",
-                    flush=True,
+                scored, correct = score_prediction(
+                    predictions, ground_truth.change_output_index
                 )
+                if scored:
+                    scored_transactions += 1
+                    correct_transactions += int(correct)
+
             if completed_count % EVALUATION_INTERVAL == 0:
                 print_evaluation(
                     completed_count,
                     errors_count,
-                    correct,
-                    incorrect,
-                    abstained,
-                    time.perf_counter() - started,
+                    scored_transactions,
+                    correct_transactions,
                 )
 
     if completed_count == 0:
         raise ValueError(f"No ground-truth rows found in {args.ground_truth}")
 
-    print()
-    elapsed = time.perf_counter() - started
-    if completed_count % EVALUATION_INTERVAL:
-        print_evaluation(
-            completed_count,
-            errors_count,
-            correct,
-            incorrect,
-            abstained,
-            elapsed,
-        )
+    print_evaluation(
+        completed_count,
+        errors_count,
+        scored_transactions,
+        correct_transactions,
+        final=True,
+    )
 
     for txid, error in errors:
         print(f"Skipped {txid}: {error}", file=sys.stderr)
