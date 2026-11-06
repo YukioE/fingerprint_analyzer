@@ -26,6 +26,7 @@ class TxInput:
     scriptsig: str = ""
     scriptsig_asm: str = ""
     witness: list[str] | None = None
+    prevout_block_height: int | None = None
 
 
 @dataclass

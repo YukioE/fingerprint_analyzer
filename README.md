@@ -10,10 +10,15 @@ those features with labeled examples using machine-learning classifiers.
 - Analyze one or more transactions and print detailed JSON reports.
 - Detect transaction patterns (see [fingerprints](./src/fingerprint_analyzer/fingerprints/)), including:
   - BIP69 input/output ordering and anti-fee-sniping locktimes.
-  - Replace-By-Fee signaling, transaction version, output count, and OP_RETURN.
+  - Exact per-input sequence patterns, locktime values, transaction version,
+    output count, and OP_RETURN.
   - Fee-rate choices and ECDSA signature/public-key characteristics.
   - Output address families: Base58, Bech32, and Bech32m.
-  - Spent input types, including P2PK, P2PKH, P2SH, P2WPKH, P2WSH, and P2TR.
+  - Spent input paths, separating single-key, nested/native multisig,
+    Taproot key-path/script-path, and custom scripts. A key-path spend cannot
+    reveal whether its key was created with MuSig2.
+  - Dust and coin-selection heuristics; FIFO/LIFO uses prevout confirmation
+    heights and input ordering, not the wallet's full available UTXO set.
 - Convert labeled transaction lists into feature datasets.
 - Train and evaluate decision-tree, random-forest, extra-trees,
   gradient-boosting, logistic-regression, linear-SVM, RBF-SVM,
@@ -160,28 +165,14 @@ fingerprint_analyzer tx b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d
   "fee_sats": 413,
   "vbytes": 172,
   "fee_rate_sat_vb": 2.401,
-  "input_type_set": [
-    "p2wpkh"
-  ],
-  "output_type_set": [
-    "bech32"
-  ],
-  "sequence_set": [
-    "0xffffffff"
-  ],
-  "sighash_set_detail": [
-    1
-  ],
   "fingerprints": {
     "anti_fee_sniping": false,
     "bip69": true,
-    "compressed_ecdsa_public_keys": true,
     "low_r_grinding": false,
     "manual_fee_rate_setting": true,
     "more_than_2_outputs": true,
     "multi_type_vin": false,
     "op_return_outputs": false,
-    "default_opt_in_rbf_set": false,
     "sending_to_base58": false,
     "sending_to_bech32": true,
     "sending_to_bech32m": false,
@@ -218,12 +209,12 @@ Generate a feature CSV by redirecting standard output:
 ```bash
 fingerprint_analyzer dataset labeled_transactions.csv > features.csv
 
-wallet,anti_fee_sniping,bip69,compressed_ecdsa_public_keys,low_r_grinding,manual_fee_rate_setting,more_than_2_outputs,multi_type_vin,op_return_outputs,default_opt_in_rbf_set,sending_to_base58,sending_to_bech32,sending_to_bech32m,spending_from_p2pk,spending_from_p2pkh,spending_from_p2sh_all,spending_from_p2sh_multisig,spending_from_p2sh_p2wpkh,spending_from_p2tr,spending_from_p2wpkh,spending_from_p2wsh_all,spending_from_p2wsh_multisig,txversion_2,uncompressed_ecdsa_public_keys
-Sparrow,1,0,1,1,1,1,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0,1,0
-Sparrow,1,0,1,1,1,0,0,0,1,0,1,0,0,0,0,0,0,0,1,0,0,1,0
+wallet,anti_fee_sniping,bip69,low_r_grinding,manual_fee_rate_setting,more_than_2_outputs,multi_type_vin,op_return_outputs,sending_to_base58,sending_to_bech32,sending_to_bech32m,spending_from_p2pk,spending_from_p2pkh,spending_from_p2sh_all,spending_from_p2sh_multisig,spending_from_p2sh_p2wpkh,spending_from_p2tr,spending_from_p2wpkh,spending_from_p2wsh_all,spending_from_p2wsh_multisig,txversion_2,uncompressed_ecdsa_public_keys
+Sparrow,1,0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0
+Sparrow,1,0,1,1,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0
 ...
 
-Created 100 rows with 23 fingerprint features
+Created 100 rows with 22 fingerprint features
 ```
 
 You can override the API URL with `--mempool-url`. The output contains the wallet label and fingerprint columns, but does not
@@ -314,7 +305,7 @@ Transaction: b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
       1. Electrum (40.0%)
       2. Trezor (40.0%)
       3. Bitbox (20.0%)
-    Reasons: bip69=1, compressed_ecdsa_public_keys=1, manual_fee_rate_setting=1
+    Reasons: bip69=1, more_than_2_outputs=1, manual_fee_rate_setting=1
 ```
 
 When `--dataset` is omitted, `train`, `identify`, and `change` use the first

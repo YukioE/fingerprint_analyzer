@@ -27,19 +27,17 @@ class FingerprintContext:
         """Expose the transaction outputs to detector implementations."""
         return self.tx.outputs
 
-    @property
-    def rbf(self) -> bool:
-        """Return whether any non-coinbase input signals opt-in RBF."""
-        return any(
-            inp.sequence < 0xFFFFFFFE for inp in self.tx.inputs if not inp.is_coinbase
-        )
-
-
 def has_input_type(ctx: FingerprintContext, input_types: set[str]) -> bool | None:
     """Match input types while preserving unknown when classification is incomplete."""
     if ctx.input_type_set & input_types:
         return True
-    if ctx.input_type_set & {"unknown", "p2sh_unknown", "p2wsh_unknown"}:
+    if ctx.input_type_set & {
+        "unknown",
+        "p2sh_unknown",
+        "p2wsh_unknown",
+        "p2tr_unknown",
+        "p2sh_p2wsh_unknown",
+    }:
         return None
     return False
 

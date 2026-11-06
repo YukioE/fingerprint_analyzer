@@ -13,9 +13,47 @@ def script_bytes(value: str) -> bytes:
         return b""
 
 
+def script_opcodes(script: bytes) -> Iterator[int]:
+    """Yield opcodes while skipping pushed data, stopping on malformed pushes."""
+    index = 0
+    while index < len(script):
+        opcode = script[index]
+        index += 1
+        if opcode <= 75:
+            length = opcode
+        elif opcode == 0x4C:
+            if index >= len(script):
+                return
+            length = script[index]
+            index += 1
+        elif opcode == 0x4D:
+            if index + 2 > len(script):
+                return
+            length = int.from_bytes(script[index : index + 2], "little")
+            index += 2
+        elif opcode == 0x4E:
+            if index + 4 > len(script):
+                return
+            length = int.from_bytes(script[index : index + 4], "little")
+            index += 4
+        else:
+            yield opcode
+            continue
+        if index + length > len(script):
+            return
+        index += length
+
+
 def is_multisig_script(script: bytes) -> bool:
-    """Check whether a script ends with a standard CHECKMULTISIG opcode."""
-    return bool(script) and script[-1] in {0xAE, 0xAF}
+    """Recognize legacy CHECKMULTISIG and common tapscript threshold scripts."""
+    opcodes = list(script_opcodes(script))
+    if opcodes and opcodes[-1] in {0xAE, 0xAF}:
+        return True
+    return (
+        opcodes.count(0xBA) >= 1
+        and opcodes.count(0xAC) + opcodes.count(0xBA) >= 2
+        and opcodes[-1] == 0x9C
+    )
 
 
 def last_push(script: bytes) -> bytes:
@@ -79,7 +117,7 @@ def is_ecdsa_signature(raw: bytes) -> bool:
 
 
 def input_type(inp: TxInput) -> str:
-    """Classify a spent output using its script and available spending data."""
+    """Classify a spent output by script family and observed spend path."""
     if not inp.prevout:
         return "unknown"
 
@@ -99,14 +137,24 @@ def input_type(inp: TxInput) -> str:
     ):
         return "p2pkh"
     if script_type in {"p2tr", "witness_v1_taproot"} or script.startswith(b"\x51\x20"):
-        return "p2tr"
+        witness = list(inp.witness or [])
+        if witness and script_bytes(witness[-1]).startswith(b"\x50"):
+            witness.pop()
+        if len(witness) == 1:
+            return "p2tr_keypath"
+        if len(witness) >= 2:
+            tapscript = script_bytes(witness[-2])
+            if is_multisig_script(tapscript):
+                return "p2tr_scriptpath_multisig"
+            return "p2tr_scriptpath_custom"
+        return "p2tr_unknown"
     if script_type in {"p2wpkh", "witness_v0_keyhash"} or script.startswith(b"\x00\x14"):
         return "p2wpkh"
     if script_type in {"p2wsh", "witness_v0_scripthash"} or script.startswith(b"\x00\x20"):
         if not inp.witness:
             return "p2wsh_unknown"
         witness_script = script_bytes(inp.witness[-1])
-        return "p2wsh_multisig" if is_multisig_script(witness_script) else "p2wsh_all"
+        return "p2wsh_multisig" if is_multisig_script(witness_script) else "p2wsh_custom"
     if script_type in {"p2sh", "scripthash"} or (
         len(script) == 23 and script.startswith(b"\xa9\x14") and script.endswith(b"\x87")
     ):
@@ -116,8 +164,15 @@ def input_type(inp: TxInput) -> str:
         if redeem.startswith(b"\x00\x14"):
             return "p2sh_p2wpkh"
         if redeem.startswith(b"\x00\x20"):
-            return "p2sh_p2wsh"
-        return "p2sh_multisig" if is_multisig_script(redeem) else "p2sh_all"
+            if not inp.witness:
+                return "p2sh_p2wsh_unknown"
+            witness_script = script_bytes(inp.witness[-1])
+            return (
+                "p2sh_p2wsh_multisig"
+                if is_multisig_script(witness_script)
+                else "p2sh_p2wsh_custom"
+            )
+        return "p2sh_multisig" if is_multisig_script(redeem) else "p2sh_custom"
     return script_type or "unknown"
 
 
@@ -139,6 +194,32 @@ def output_type(output) -> str:
     if address.startswith(("bc1", "tb1", "bcrt1")):
         return "bech32m" if address.startswith(("bc1p", "tb1p", "bcrt1p")) else "bech32"
     return script_type or "unknown"
+
+
+def dust_threshold(output) -> int | None:
+    """Return the standard 1 sat/vB dust cutoff for supported output templates."""
+    script_type = output.scriptpubkey_type.lower()
+    script = script_bytes(output.scriptpubkey)
+
+    if script_type in {"op_return", "nulldata"} or script.startswith(b"\x6a"):
+        return None
+    if script_type in {"p2pkh", "pubkeyhash", "p2pk"} or (
+        len(script) == 25 and script.startswith(b"\x76\xa9\x14")
+    ):
+        return 546
+    if script_type in {"p2sh", "scripthash"} or (
+        len(script) == 23 and script.startswith(b"\xa9\x14")
+    ):
+        return 540
+    if script_type in {"p2wpkh", "witness_v0_keyhash"} or script.startswith(b"\x00\x14"):
+        return 294
+    if (
+        script_type in {"p2wsh", "witness_v0_scripthash", "p2tr", "witness_v1_taproot"}
+        or script.startswith(b"\x00\x20")
+        or script.startswith(b"\x51\x20")
+    ):
+        return 330
+    return None
 
 
 def signature_candidates(tx: Transaction) -> Iterator[bytes]:

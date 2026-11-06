@@ -79,7 +79,47 @@ class ElectrsProvider(TransactionProvider):
         raw = await _run_http_request(self._fetch_json, url)
         if not isinstance(raw, dict):
             raise ProviderError(f"invalid transaction response for {txid}")
-        return self._parse(raw)
+        transaction = self._parse(raw)
+        await self._populate_prevout_heights(transaction)
+        return transaction
+
+    async def _populate_prevout_heights(self, transaction: Transaction) -> None:
+        """Attach each input's parent transaction confirmation height."""
+        inputs_by_txid: dict[str, list[TxInput]] = {}
+        for txin in transaction.inputs:
+            if not txin.is_coinbase and txin.prevout is not None:
+                inputs_by_txid.setdefault(txin.txid, []).append(txin)
+        if len(inputs_by_txid) < 2:
+            return
+
+        async def fetch_height(parent_txid: str) -> tuple[str, int | None]:
+            raw = await _run_http_request(
+                self._fetch_json, f"{self.base_url}/tx/{parent_txid}"
+            )
+            if not isinstance(raw, dict):
+                raise ProviderError(
+                    f"invalid parent transaction response for {parent_txid}"
+                )
+            status = raw.get("status", {})
+            if not isinstance(status, dict):
+                raise ProviderError(f"invalid parent transaction status for {parent_txid}")
+            height = status.get("block_height")
+            if height is not None and (
+                not isinstance(height, int) or isinstance(height, bool) or height < 0
+            ):
+                raise ProviderError(
+                    f"invalid parent transaction block height for {parent_txid}"
+                )
+            return parent_txid, height
+
+        parent_txids = list(inputs_by_txid)
+        heights: dict[str, int | None] = {}
+        for start in range(0, len(parent_txids), HTTP_WORKER_COUNT):
+            batch = parent_txids[start : start + HTTP_WORKER_COUNT]
+            heights.update(await asyncio.gather(*(fetch_height(txid) for txid in batch)))
+        for parent_txid, inputs in inputs_by_txid.items():
+            for txin in inputs:
+                txin.prevout_block_height = heights[parent_txid]
 
     async def get_output_spends(self, txid: str) -> list[str | None]:
         """Return the spending transaction ID for each output, if it is spent."""
