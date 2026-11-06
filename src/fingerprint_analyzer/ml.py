@@ -24,7 +24,7 @@ from sklearn.metrics import (
 )
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
@@ -113,22 +113,38 @@ def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[s
     return features, labels, feature_names
 
 
-def _new_classifier(algorithm: str, training_size: int):
+def _new_classifier(
+    algorithm: str,
+    training_size: int,
+):
     """Create a configured classifier, adapting KNN to the available samples."""
     if algorithm == "decision-tree":
         return make_pipeline(
             FunctionTransformer(_unknowns_as_nan),
-            DecisionTreeClassifier(random_state=22),
+            DecisionTreeClassifier(
+                max_features=0.5,
+                random_state=22,
+            ),
         )
     if algorithm == "random-forest":
         return make_pipeline(
             FunctionTransformer(_unknowns_as_nan),
-            RandomForestClassifier(n_estimators=100, random_state=22),
+            RandomForestClassifier(
+                n_estimators=100,
+                class_weight="balanced",
+                max_features=0.5,
+                random_state=22,
+            ),
         )
     if algorithm == "extra-trees":
         return make_pipeline(
             FunctionTransformer(_unknowns_as_nan),
-            ExtraTreesClassifier(n_estimators=100, random_state=22),
+            ExtraTreesClassifier(
+                n_estimators=100,
+                class_weight="balanced",
+                max_features="sqrt",
+                random_state=22,
+            ),
         )
     if algorithm == "gradient-boosting":
         return GradientBoostingClassifier(random_state=22)
@@ -278,9 +294,9 @@ def train_models(
 
         if mode == "evaluate" and testing_indices:
             # Keep the holdout separate so reported scores measure unseen samples.
-            classifier = _new_classifier(algorithm, len(training_indices))
             training_features = [features[index] for index in training_indices]
             training_labels = [labels[index] for index in training_indices]
+            classifier = _new_classifier(algorithm, len(training_indices))
             classifier.fit(training_features, training_labels)
 
             test_features = [features[index] for index in testing_indices]
@@ -300,24 +316,26 @@ def train_models(
             "evaluation": evaluation,
         }
 
+        fitted_classifier = classifier
         importance_model = (
-            classifier[-1] if classifier is not None and hasattr(classifier, "steps")
-            else classifier
+            fitted_classifier[-1]
+            if fitted_classifier is not None and hasattr(fitted_classifier, "steps")
+            else fitted_classifier
         )
         if importance_model is not None and hasattr(
             importance_model, "feature_importances_"
         ):
+            importance_names = feature_names
             result["feature_importances"] = dict(
                 sorted(
                     zip(
-                        feature_names,
+                        importance_names,
                         map(float, importance_model.feature_importances_),
                     ),
                     key=lambda item: item[1],
                     reverse=True,
                 )
             )
-
         results.append(result)
 
     return results, classifiers, feature_names
