@@ -17,8 +17,7 @@ those features with labeled examples using machine-learning classifiers.
   - Spent input paths, separating single-key, nested/native multisig,
     Taproot key-path/script-path, and custom scripts. A key-path spend cannot
     reveal whether its key was created with MuSig2.
-  - Dust and coin-selection heuristics; FIFO/LIFO uses prevout confirmation
-    heights and input ordering, not the wallet's full available UTXO set.
+  - Dust and unnecessary-input heuristics.
 - Convert labeled transaction lists into feature datasets.
 - Train and evaluate decision-tree, random-forest, extra-trees,
   gradient-boosting, logistic-regression, linear-SVM, RBF-SVM,
