@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
@@ -71,6 +71,12 @@ def main() -> int:
         )
         random_forest = RandomForestClassifier(
             n_estimators=100, random_state=22
+        ).fit(training_features, training_labels)
+        extra_trees = ExtraTreesClassifier(
+            n_estimators=100,
+            class_weight="balanced",
+            max_features="sqrt",
+            random_state=22,
         ).fit(training_features, training_labels)
 
         max_k = min(25, len(training_features))
@@ -148,11 +154,19 @@ def main() -> int:
 
         tree_importances = decision_tree.feature_importances_
         forest_importances = random_forest.feature_importances_
-        averaged_importances = (tree_importances + forest_importances) / 2
+        extra_trees_importances = extra_trees.feature_importances_
+        averaged_importances = (
+            tree_importances + forest_importances + extra_trees_importances
+        ) / 3
         importance_plots = (
             ("feature_importance_decision_tree", "Decision tree", tree_importances),
             ("feature_importance_random_forest", "Random forest", forest_importances),
-            ("feature_importance_average", "Average importance", averaged_importances),
+            ("feature_importance_extra_trees", "Extra Trees", extra_trees_importances),
+            (
+                "feature_importance_average",
+                "Average importance (decision tree, random forest, Extra Trees)",
+                averaged_importances,
+            ),
         )
         for filename, title, values in importance_plots:
             top_indices = sorted(

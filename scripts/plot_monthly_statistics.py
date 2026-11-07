@@ -13,19 +13,23 @@ from psycopg import Error as PsycopgError
 from psycopg import connect, sql
 
 from fingerprint_analyzer.database import BLOCKS_TABLE, TRANSACTIONS_TABLE
+from fingerprint_analyzer.fingerprints import DETECTORS
 
-BOOLEAN_FEATURES = (
-    ("anti_fee_sniping", "Anti-fee-sniping"),
-    ("bip69", "BIP69"),
-    ("low_r_grinding", "Low-R grinding"),
-    ("more_than_2_outputs", "More than 2 outputs"),
-    ("multi_type_vin", "Multiple input types"),
-    ("sending_to_base58", "Base58 outputs"),
-    ("sending_to_bech32", "Bech32 outputs"),
-    ("sending_to_bech32m", "Bech32m outputs"),
-    ("op_return_outputs", "OP_RETURN outputs"),
-    ("compressed_ecdsa_public_keys", "Compressed ECDSA public keys"),
-    ("default_opt_in_rbf_set", "Replace by Fee"),
+FEATURE_LABELS = {
+    "bip69": "BIP69",
+    "low_r_grinding": "Low-R grinding",
+    "multi_type_vin": "Multiple input types",
+    "sending_to_base58": "Base58 outputs",
+    "sending_to_bech32": "Bech32 outputs",
+    "sending_to_bech32m": "Bech32m outputs",
+    "op_return_outputs": "OP_RETURN outputs",
+    "uncompressed_ecdsa_public_keys": "Uncompressed ECDSA public keys",
+}
+FINGERPRINT_NAMES = tuple(detector.fingerprint_name for detector in DETECTORS)
+BOOLEAN_FEATURES = tuple(
+    (name, FEATURE_LABELS.get(name, name.replace("_", " ").capitalize()))
+    for name in FINGERPRINT_NAMES
+    if not name.startswith("spending_from_") and name != "txversion_2"
 )
 
 
@@ -47,7 +51,9 @@ def _fetch_monthly_statistics(database_url):
     with connect(database_url) as connection:
         columns = _available_columns(connection)
         input_features = sorted(
-            name for name in columns if name.startswith("spending_from_")
+            name
+            for name in FINGERPRINT_NAMES
+            if name in columns and name.startswith("spending_from_")
         )
         feature_names = [name for name, _ in BOOLEAN_FEATURES] + input_features
         feature_names = [name for name in feature_names if name in columns]
