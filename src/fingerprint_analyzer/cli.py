@@ -476,14 +476,16 @@ async def _run_change(args) -> int:
     """Identify likely change outputs by comparing spending wallet labels."""
     try:
         dataset_path = args.dataset or first_dataset()
-        decision_tree, feature_names = train_classifier(
-            dataset_path, "decision-tree"
-        )
+        extra_trees, feature_names = train_classifier(dataset_path, "extra-trees")
 
         provider = _provider(args)
         transaction = await provider.get_transaction(args.txid)
         result = await identify_transaction_changes(
-            transaction, provider, {"decision-tree": decision_tree}, feature_names
+            transaction,
+            provider,
+            {"extra-trees": extra_trees},
+            feature_names,
+            classifier_name="extra-trees",
         )
     except (OSError, ProviderError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -491,7 +493,7 @@ async def _run_change(args) -> int:
 
     print(f"Dataset:          {dataset_path.name}")
     print(f"Transaction:      {result.transaction_id}")
-    print(f"Decision-tree wallet: {result.wallet_label or 'no prediction'}")
+    print(f"Extra-trees wallet: {result.wallet_label or 'no prediction'}")
 
     likely_change_outputs = [
         output.output_index
