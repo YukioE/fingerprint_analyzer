@@ -122,7 +122,7 @@ def _new_classifier(
         return make_pipeline(
             FunctionTransformer(_unknowns_as_nan),
             DecisionTreeClassifier(
-                max_features=0.5,
+                max_features="sqrt",
                 random_state=22,
             ),
         )
@@ -132,7 +132,7 @@ def _new_classifier(
             RandomForestClassifier(
                 n_estimators=100,
                 class_weight="balanced",
-                max_features=0.5,
+                max_features="sqrt",
                 random_state=22,
             ),
         )
