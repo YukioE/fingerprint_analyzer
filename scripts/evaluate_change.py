@@ -17,7 +17,7 @@ from fingerprint_analyzer.provider import ElectrsProvider, ProviderError
 
 MEMPOOL_API_URL = "http://100.126.92.24:3000"
 MAX_CONCURRENT_REQUESTS = 128
-EVALUATION_INTERVAL = 1_0
+EVALUATION_INTERVAL = 1_000
 # Treat outputs divisible by 1,000 satoshis as round payment amounts.
 ROUND_AMOUNT_INCREMENT = 1_000
 
@@ -217,7 +217,7 @@ async def main() -> None:
     dataset_path = first_dataset()
     decision_tree, feature_names = train_classifier(dataset_path, "decision-tree")
     classifiers = {"decision-tree": decision_tree}
-    provider = ElectrsProvider(base_url=MEMPOOL_API_URL, cache_responses=True)
+    provider = ElectrsProvider(base_url=MEMPOOL_API_URL)
     request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
     print(f"Ground truth: {args.ground_truth}")
