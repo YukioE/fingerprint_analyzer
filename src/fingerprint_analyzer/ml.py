@@ -1,8 +1,7 @@
 """Load fingerprint datasets, train classifiers, and evaluate their predictions."""
 
 import csv
-import random
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Literal
 
@@ -24,6 +23,7 @@ from sklearn.metrics import (
 )
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
+from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 from sklearn.svm import SVC
@@ -180,26 +180,23 @@ def train_classifier(dataset_path: Path, algorithm: str) -> tuple[object, list[s
     return classifier, feature_names
 
 
-def _holdout_indices(labels: list[str]) -> tuple[list[int], list[int]]:
-    """Create a deterministic per-wallet train/test split without losing rare labels."""
-    groups: dict[str, list[int]] = defaultdict(list)
-    for index, label in enumerate(labels):
-        groups[label].append(index)
+def _stratified_folds(labels: list[str]) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Create deterministic stratified folds, requiring at least two samples per class."""
+    class_counts = Counter(labels)
+    if not class_counts:
+        raise ValueError("Dataset must contain at least one labeled sample")
+    min_class_count = min(class_counts.values())
+    if min_class_count < 2:
+        raise ValueError(
+            "Stratified cross-validation requires at least two samples per wallet label"
+        )
 
-    randomizer = random.Random(22)
-    training_indices: list[int] = []
-    testing_indices: list[int] = []
-
-    for indices in groups.values():
-        randomizer.shuffle(indices)
-        if len(indices) >= 2:
-            test_count = max(1, round(len(indices) * 0.2))
-            testing_indices.extend(indices[:test_count])
-            training_indices.extend(indices[test_count:])
-        else:
-            training_indices.extend(indices)
-
-    return training_indices, testing_indices
+    splitter = StratifiedKFold(
+        n_splits=min(5, min_class_count),
+        shuffle=True,
+        random_state=22,
+    )
+    return list(splitter.split(np.zeros(len(labels)), labels))
 
 
 def dataset_statistics(
@@ -216,17 +213,6 @@ def dataset_statistics(
         "unknown_feature_values": sum(value == -1 for row in features for value in row),
         "known_feature_values": sum(value != -1 for row in features for value in row),
     }
-
-
-def _evaluate(
-    classifier,
-    test_features: list[list[int]],
-    test_labels: list[str],
-    all_labels: list[str],
-) -> dict:
-    """Predict the holdout samples and calculate the standard classification metrics."""
-    predictions = classifier.predict(test_features)
-    return _evaluate_predictions(test_labels, predictions, all_labels)
 
 
 def _evaluate_predictions(
@@ -280,9 +266,7 @@ def train_models(
         dataset_fields = csv.DictReader(source).fieldnames or []
 
     ignored_features = sorted(set(dataset_fields) - METADATA_COLUMNS - ANALYZER_FEATURES)
-    training_indices, testing_indices = (
-        _holdout_indices(labels) if mode == "evaluate" else ([], [])
-    )
+    folds = _stratified_folds(labels) if mode == "evaluate" else []
     all_labels = sorted(set(labels))
 
     results: list[dict] = []
@@ -291,18 +275,33 @@ def train_models(
     for algorithm in ALGORITHMS:
         evaluation = None
         classifier = None
+        fold_importances: list[np.ndarray] = []
 
-        if mode == "evaluate" and testing_indices:
-            # Keep the holdout separate so reported scores measure unseen samples.
-            training_features = [features[index] for index in training_indices]
-            training_labels = [labels[index] for index in training_indices]
-            classifier = _new_classifier(algorithm, len(training_indices))
-            classifier.fit(training_features, training_labels)
+        if mode == "evaluate":
+            predictions: list[str | None] = [None] * len(labels)
+            for training_indices, testing_indices in folds:
+                training_features = [features[index] for index in training_indices]
+                training_labels = [labels[index] for index in training_indices]
+                classifier = _new_classifier(algorithm, len(training_indices))
+                classifier.fit(training_features, training_labels)
 
-            test_features = [features[index] for index in testing_indices]
-            test_labels = [labels[index] for index in testing_indices]
-            evaluation = _evaluate(classifier, test_features, test_labels, all_labels)
-            evaluation["training_samples"] = len(training_indices)
+                model = classifier[-1] if hasattr(classifier, "steps") else classifier
+                if hasattr(model, "feature_importances_"):
+                    fold_importances.append(model.feature_importances_)
+
+                test_features = [features[index] for index in testing_indices]
+                fold_predictions = classifier.predict(test_features)
+                for index, prediction in zip(testing_indices, fold_predictions):
+                    predictions[index] = prediction
+
+            if any(prediction is None for prediction in predictions):
+                raise RuntimeError("Cross-validation did not predict every sample")
+            evaluation = _evaluate_predictions(
+                labels,
+                [prediction for prediction in predictions if prediction is not None],
+                all_labels,
+            )
+            evaluation["cross_validation_folds"] = len(folds)
         elif mode == "identify":
             classifier = _new_classifier(algorithm, len(features))
             classifier.fit(features, labels)
@@ -316,26 +315,34 @@ def train_models(
             "evaluation": evaluation,
         }
 
-        fitted_classifier = classifier
-        importance_model = (
-            fitted_classifier[-1]
-            if fitted_classifier is not None and hasattr(fitted_classifier, "steps")
-            else fitted_classifier
-        )
-        if importance_model is not None and hasattr(
-            importance_model, "feature_importances_"
-        ):
+        if fold_importances:
+            mean_importances = np.mean(fold_importances, axis=0)
             importance_names = feature_names
             result["feature_importances"] = dict(
                 sorted(
                     zip(
                         importance_names,
-                        map(float, importance_model.feature_importances_),
+                        map(float, mean_importances),
                     ),
                     key=lambda item: item[1],
                     reverse=True,
                 )
             )
+        elif classifier is not None:
+            importance_model = (
+                classifier[-1] if hasattr(classifier, "steps") else classifier
+            )
+            if hasattr(importance_model, "feature_importances_"):
+                result["feature_importances"] = dict(
+                    sorted(
+                        zip(
+                            feature_names,
+                            map(float, importance_model.feature_importances_),
+                        ),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )
+                )
         results.append(result)
 
     return results, classifiers, feature_names

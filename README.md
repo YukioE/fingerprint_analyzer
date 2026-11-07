@@ -312,8 +312,10 @@ alphabetically sorted CSV in the package's `data` directory. A dataset created
 with the `dataset` command can be passed directly with `--dataset`. Extra
 columns not produced by the analyzer are ignored.
 
-`train` reports dataset statistics and deterministic holdout metrics for the
-supported models. `identify` fits the models on the full dataset, uses the
+`train` reports dataset statistics and deterministic stratified cross-validation
+metrics for the supported models. It uses up to five folds, limited by the
+smallest wallet class, and requires at least two samples per class.
+`identify` fits the models on the full dataset, uses the
 decision-tree prediction as the identified label, and shows each model's top
 three labels and scores for comparison. The scores are not calibrated
 probabilities that the predicted wallet is correct.

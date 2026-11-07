@@ -241,11 +241,12 @@ def _run_train(args) -> int:
         print(f"\n{_bold(model_name)}")
 
         if evaluation is None:
-            print("  Holdout evaluation unavailable (no test samples).")
+            print("  Cross-validation evaluation unavailable.")
         else:
             print(
-                f"  Holdout: {evaluation['training_samples']} training / "
-                f"{evaluation['test_samples']} test samples"
+                f"  {evaluation['cross_validation_folds']}-fold stratified "
+                f"cross-validation: {evaluation['test_samples']} out-of-fold "
+                "predictions"
             )
             print(
                 _bold(

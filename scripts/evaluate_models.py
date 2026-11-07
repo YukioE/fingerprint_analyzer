@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate classifier behavior and feature importance on a deterministic holdout."""
+"""Evaluate classifier behavior and feature importance with stratified cross-validation."""
 
 import argparse
 import sys
@@ -10,7 +10,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier, plot_tree
 
 from fingerprint_analyzer.ml import (
-    _holdout_indices,
+    _stratified_folds,
     first_dataset,
     load_feature_dataset,
 )
@@ -19,7 +19,7 @@ PLOT_DPI = 300
 
 
 def main() -> int:
-    """Train evaluation models, create plots, and report the best holdout scores."""
+    """Train evaluation models, create plots, and report cross-validation scores."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "dataset",
@@ -38,62 +38,109 @@ def main() -> int:
     try:
         dataset_path = args.dataset or first_dataset()
         features, labels, feature_names = load_feature_dataset(dataset_path)
-        training_indices, testing_indices = _holdout_indices(labels)
-        if not testing_indices:
-            raise ValueError("Dataset has no holdout samples to evaluate")
-
-        training_features = [features[index] for index in training_indices]
-        training_labels = [labels[index] for index in training_indices]
-        testing_features = [features[index] for index in testing_indices]
-        testing_labels = [labels[index] for index in testing_indices]
-
-        base_tree = DecisionTreeClassifier(random_state=22)
-        pruning_path = base_tree.cost_complexity_pruning_path(
-            training_features, training_labels
-        )
-        ccp_alphas = pruning_path.ccp_alphas
-        classifiers = [
-            DecisionTreeClassifier(random_state=22, ccp_alpha=alpha).fit(
-                training_features, training_labels
+        folds = _stratified_folds(labels)
+        fold_data = [
+            (
+                [features[index] for index in training_indices],
+                [labels[index] for index in training_indices],
+                [features[index] for index in testing_indices],
+                [labels[index] for index in testing_indices],
             )
-            for alpha in ccp_alphas
+            for training_indices, testing_indices in folds
         ]
-        train_scores = [
-            classifier.score(training_features, training_labels)
-            for classifier in classifiers
+
+        ccp_alphas = sorted(
+            {
+                float(alpha)
+                for training_features, training_labels, _, _ in fold_data
+                for alpha in DecisionTreeClassifier(random_state=22)
+                .cost_complexity_pruning_path(training_features, training_labels)
+                .ccp_alphas
+            }
+        )
+        pruning_classifiers = [
+            [
+                DecisionTreeClassifier(random_state=22, ccp_alpha=alpha).fit(
+                    training_features, training_labels
+                )
+                for alpha in ccp_alphas
+            ]
+            for training_features, training_labels, _, _ in fold_data
         ]
-        test_scores = [
-            classifier.score(testing_features, testing_labels)
-            for classifier in classifiers
-        ]
+        train_scores = []
+        test_scores = []
+        for alpha_index in range(len(ccp_alphas)):
+            train_scores.append(
+                sum(
+                    classifiers[alpha_index].score(training_features, training_labels)
+                    for (training_features, training_labels, _, _), classifiers in zip(
+                        fold_data, pruning_classifiers
+                    )
+                )
+                / len(fold_data)
+            )
+            test_scores.append(
+                sum(
+                    classifiers[alpha_index].score(testing_features, testing_labels)
+                    for (_, _, testing_features, testing_labels), classifiers in zip(
+                        fold_data, pruning_classifiers
+                    )
+                )
+                / len(fold_data)
+            )
+
         decision_tree = DecisionTreeClassifier(random_state=22).fit(
-            training_features, training_labels
+            fold_data[0][0], fold_data[0][1]
         )
-        random_forest = RandomForestClassifier(
-            n_estimators=100, random_state=22
-        ).fit(training_features, training_labels)
-        extra_trees = ExtraTreesClassifier(
-            n_estimators=100,
-            class_weight="balanced",
-            max_features="sqrt",
-            random_state=22,
-        ).fit(training_features, training_labels)
-
-        max_k = min(25, len(training_features))
-        knn_classifiers = [
-            KNeighborsClassifier(n_neighbors=k, metric="cosine").fit(
+        random_forests = [
+            RandomForestClassifier(n_estimators=100, random_state=22).fit(
                 training_features, training_labels
             )
-            for k in range(1, max_k + 1)
+            for training_features, training_labels, _, _ in fold_data
         ]
-        knn_train_scores = [
-            classifier.score(training_features, training_labels)
-            for classifier in knn_classifiers
+        extra_trees_models = [
+            ExtraTreesClassifier(
+                n_estimators=100,
+                class_weight="balanced",
+                max_features="sqrt",
+                random_state=22,
+            ).fit(training_features, training_labels)
+            for training_features, training_labels, _, _ in fold_data
         ]
-        knn_test_scores = [
-            classifier.score(testing_features, testing_labels)
-            for classifier in knn_classifiers
+
+        max_k = min(
+            25, min(len(training_features) for training_features, *_ in fold_data)
+        )
+        knn_models = [
+            [
+                KNeighborsClassifier(n_neighbors=k, metric="cosine").fit(
+                    training_features, training_labels
+                )
+                for k in range(1, max_k + 1)
+            ]
+            for training_features, training_labels, _, _ in fold_data
         ]
+        knn_train_scores = []
+        knn_test_scores = []
+        for k_index in range(max_k):
+            knn_train_scores.append(
+                sum(
+                    classifiers[k_index].score(training_features, training_labels)
+                    for (training_features, training_labels, _, _), classifiers in zip(
+                        fold_data, knn_models
+                    )
+                )
+                / len(fold_data)
+            )
+            knn_test_scores.append(
+                sum(
+                    classifiers[k_index].score(testing_features, testing_labels)
+                    for (_, _, testing_features, testing_labels), classifiers in zip(
+                        fold_data, knn_models
+                    )
+                )
+                / len(fold_data)
+            )
 
         try:
             import matplotlib
@@ -107,13 +154,14 @@ def main() -> int:
 
         best_index = max(range(len(test_scores)), key=test_scores.__getitem__)
         print(
-            f"Best holdout accuracy: {test_scores[best_index]:.1%} "
+            f"Best cross-validation accuracy: {test_scores[best_index]:.1%} "
             f"at ccp_alpha={ccp_alphas[best_index]:.6g}"
         )
 
         best_k_index = max(range(len(knn_test_scores)), key=knn_test_scores.__getitem__)
         print(
-            f"Best KNN holdout accuracy: {knn_test_scores[best_k_index]:.1%} "
+            f"Best KNN cross-validation accuracy: "
+            f"{knn_test_scores[best_k_index]:.1%} "
             f"at k={best_k_index + 1} (cosine distance)"
         )
 
@@ -121,7 +169,7 @@ def main() -> int:
         figure, axis = plt.subplots()
         axis.set_xlabel("alpha")
         axis.set_ylabel("accuracy")
-        axis.set_title("Accuracy vs alpha for training and testing sets")
+        axis.set_title("Mean fold accuracy vs alpha")
         axis.plot(
             ccp_alphas,
             train_scores,
@@ -131,7 +179,7 @@ def main() -> int:
         axis.plot(
             ccp_alphas,
             test_scores,
-            label="test",
+            label="validation",
             drawstyle="steps-post",
         )
         axis.legend()
@@ -153,8 +201,12 @@ def main() -> int:
         figures.append(("decision_tree_structure", figure))
 
         tree_importances = decision_tree.feature_importances_
-        forest_importances = random_forest.feature_importances_
-        extra_trees_importances = extra_trees.feature_importances_
+        forest_importances = sum(
+            model.feature_importances_ for model in random_forests
+        ) / len(random_forests)
+        extra_trees_importances = sum(
+            model.feature_importances_ for model in extra_trees_models
+        ) / len(extra_trees_models)
         averaged_importances = (
             tree_importances + forest_importances + extra_trees_importances
         ) / 3
@@ -190,7 +242,7 @@ def main() -> int:
         figure, axis = plt.subplots()
         k_values = range(1, max_k + 1)
         axis.plot(k_values, knn_train_scores, label="train")
-        axis.plot(k_values, knn_test_scores, label="holdout")
+        axis.plot(k_values, knn_test_scores, label="cross-validation")
         axis.set_xticks(list(k_values))
         axis.set_xlabel("number of neighbors (k)")
         axis.set_ylabel("accuracy")
