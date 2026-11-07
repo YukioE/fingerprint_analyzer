@@ -99,7 +99,7 @@ fingerprint_analyzer dataset <input_csv> [--mempool-url URL]
 fingerprint_analyzer train [--dataset CSV]
 fingerprint_analyzer identify <TXID> [<TXID> ...] [--dataset CSV] [--testnet | --testnet4] [--mempool-url URL]
 fingerprint_analyzer change <TXID> [--dataset CSV] [--testnet | --testnet4] [--mempool-url URL]
-fingerprint_analyzer collect [--testnet | --testnet4] [--mempool-url URL] [--database-url URL] [--start-height HEIGHT] [--poll-interval SECONDS] [--block-interval N]
+fingerprint_analyzer collect [--testnet | --testnet4] [--mempool-url URL] [--database-url URL] [--start-height HEIGHT] [--poll-interval SECONDS]
 ```
 
 | Command | Purpose |
@@ -137,10 +137,15 @@ accept `--mempool-url`.
 | `--database-url URL` | `DATABASE_URL` environment variable | PostgreSQL connection URL. Required if the environment variable is not set. |
 | `--start-height HEIGHT` | Current chain tip for a new database | First block to collect. When resuming, collection continues after the latest stored block. |
 | `--poll-interval SECONDS` | `10` | Time between checks for new blocks; must be greater than zero. |
-| `--block-interval N` | `1` | Store every Nth block; must be greater than zero. |
 
 Stop the collector with Ctrl+C. It will resume from the latest stored block on
-the next run.
+the next run. The collector keeps a uniform random sample of at most 100,000
+transactions per UTC calendar month. It buffers a month's transaction IDs and
+fetches the sample after seeing the first block of the following month, so the
+current month's sample is not stored until the month closes. If stopped before
+then, that uncommitted month is scanned again on restart. Existing transaction
+rows are retained and count toward the monthly cap; preexisting months already
+over the cap are not trimmed. Every block is scanned.
 
 ## Examples
 
@@ -370,7 +375,7 @@ fingerprint_analyzer collect
 Or pass the connection URL directly:
 
 ```bash
-fingerprint_analyzer collect --database-url "postgresql://user:password@localhost:5432/fingerprints" --start-height 800000 --poll-interval 15 --block-interval 2
+fingerprint_analyzer collect --database-url "postgresql://user:password@localhost:5432/fingerprints" --start-height 800000 --poll-interval 15
 ```
 
 The tool creates its transaction and block tables if they do not already exist.

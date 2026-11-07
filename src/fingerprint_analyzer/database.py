@@ -1,6 +1,6 @@
 """PostgreSQL storage for per-transaction fingerprints and block metadata."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from psycopg import Connection, connect, sql
 
@@ -66,6 +66,30 @@ class FingerprintStore:
         ).fetchone()
         return row[0]
 
+    def get_month_transaction_count(self, year: int, month: int) -> int:
+        """Return the number of stored transactions in a UTC calendar month."""
+        month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+        next_month_year = year + (1 if month == 12 else 0)
+        next_month_number = 1 if month == 12 else month + 1
+        next_month = datetime(
+            next_month_year, next_month_number, 1, tzinfo=timezone.utc
+        )
+        row = self.connection.execute(
+            sql.SQL(
+                """
+                SELECT COUNT(*)
+                FROM {} AS t
+                JOIN {} AS b USING (block_height)
+                WHERE b."timestamp" >= %s AND b."timestamp" < %s
+                """
+            ).format(
+                sql.Identifier(TRANSACTIONS_TABLE),
+                sql.Identifier(BLOCKS_TABLE),
+            ),
+            (month_start, next_month),
+        ).fetchone()
+        return row[0]
+
     def save_block(
         self,
         height: int,
@@ -73,7 +97,15 @@ class FingerprintStore:
         timestamp: datetime,
         reports: list[FingerprintReport],
     ) -> None:
-        """Write block metadata and its transaction fingerprints atomically."""
+        """Write one block and its transaction fingerprints atomically."""
+        self.save_blocks([(height, block_hash, timestamp)], {height: reports})
+
+    def save_blocks(
+        self,
+        blocks: list[tuple[int, str, datetime]],
+        reports_by_height: dict[int, list[FingerprintReport]],
+    ) -> None:
+        """Atomically save a batch of blocks and their selected transactions."""
         columns = [
             "txid",
             "block_height",
@@ -99,12 +131,13 @@ class FingerprintStore:
                 height,
                 *(report.fingerprints[name] for name in self.fingerprint_names),
             )
+            for height, reports in reports_by_height.items()
             for report in reports
         ]
 
         with self.connection.transaction():
-            self.connection.execute(
-                sql.SQL(
+            if blocks:
+                block_insert = sql.SQL(
                     """
                     INSERT INTO {} (block_height, block_hash, "timestamp")
                     VALUES (%s, %s, %s)
@@ -112,9 +145,9 @@ class FingerprintStore:
                         block_hash = EXCLUDED.block_hash,
                         "timestamp" = EXCLUDED."timestamp"
                     """
-                ).format(sql.Identifier(BLOCKS_TABLE)),
-                (height, block_hash, timestamp),
-            )
+                ).format(sql.Identifier(BLOCKS_TABLE))
+                with self.connection.cursor() as cursor:
+                    cursor.executemany(block_insert, blocks)
             if values:
                 with self.connection.cursor() as cursor:
                     cursor.executemany(insert, values)

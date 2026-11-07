@@ -133,12 +133,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="seconds between checks for new blocks (default: 10)",
     )
-    collect_parser.add_argument(
-        "--block-interval",
-        type=int,
-        default=1,
-        help="store every Nth block (default: 1, store every block)",
-    )
     return parser
 
 
@@ -549,10 +543,6 @@ async def _run_collect(args) -> int:
     if args.poll_interval <= 0:
         print("Error: --poll-interval must be greater than zero", file=sys.stderr)
         return 1
-    if args.block_interval <= 0:
-        print("Error: --block-interval must be greater than zero", file=sys.stderr)
-        return 1
-
     store = None
     try:
         store = FingerprintStore(args.database_url)
@@ -562,7 +552,6 @@ async def _run_collect(args) -> int:
             store,
             args.start_height,
             args.poll_interval,
-            args.block_interval,
         )
     except (OSError, PsycopgError, ProviderError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
