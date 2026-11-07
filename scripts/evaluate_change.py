@@ -116,19 +116,20 @@ def universal_predictions(transaction: Transaction) -> dict[str, list[bool]]:
 def iter_ground_truth(path: Path) -> Iterator[GroundTruth]:
     """Stream every labeled transaction from the ground-truth CSV."""
     with path.open(encoding="utf-8-sig", newline="") as source:
-        reader = csv.DictReader(source)
-        if not reader.fieldnames or not {"txhash", "change_output_idx"} <= set(
-            reader.fieldnames
-        ):
-            raise ValueError(
-                "Ground truth CSV must contain txhash and change_output_idx"
-            )
+        reader = csv.reader(source)
+        header = next(reader, None)
+        if header is None or len(header) != 2:
+            raise ValueError("Ground truth CSV must contain exactly 2 columns")
 
         for row_number, row in enumerate(reader, start=2):
-            txid = (row.get("txhash") or "").strip()
+            if len(row) != 2:
+                raise ValueError(
+                    f"Expected 2 columns in ground truth CSV row {row_number}"
+                )
+            txid = row[0].strip()
             try:
-                output_index = int(row["change_output_idx"])
-            except (KeyError, TypeError, ValueError) as exc:
+                output_index = int(row[1])
+            except ValueError as exc:
                 raise ValueError(
                     f"Invalid change_output_idx in CSV row {row_number}"
                 ) from exc
