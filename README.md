@@ -38,7 +38,7 @@ Machine-learning datasets encode these as `1`, `0`, and `-1`, respectively;
 
 - Python 3.11 or newer.
 - The dependencies installed by the project:
-  - `scikit-learn >= 1.2`
+  - `scikit-learn >= 1.4`
   - `psycopg[binary] >= 3.1`
 - PostgreSQL is only needed for the `collect` command and monthly statistics
   script. (the repository contains a [docker compose yaml](./compose.yaml) for an easy setup of the database)
@@ -170,27 +170,38 @@ fingerprint_analyzer tx b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d
   "vbytes": 172,
   "fee_rate_sat_vb": 2.401,
   "fingerprints": {
-    "anti_fee_sniping": false,
     "bip69": true,
+    "dust_avoidance": false,
     "low_r_grinding": false,
     "manual_fee_rate_setting": true,
     "more_than_2_outputs": true,
     "multi_type_vin": false,
+    "nlocktime_anti_fee_sniping": false,
+    "nlocktime_sub_tip": false,
+    "nlocktime_zero": true,
+    "nsequence_0xfffffffd": true,
+    "nsequence_0xfffffffe": false,
+    "nsequence_0xffffffff": false,
+    "nsequence_mixed": false,
+    "nsequence_relative_locktime": false,
     "op_return_outputs": false,
     "sending_to_base58": false,
     "sending_to_bech32": true,
     "sending_to_bech32m": false,
     "spending_from_p2pk": false,
     "spending_from_p2pkh": false,
-    "spending_from_p2sh_all": false,
+    "spending_from_p2sh_custom": false,
     "spending_from_p2sh_multisig": false,
     "spending_from_p2sh_p2wpkh": false,
-    "spending_from_p2tr": false,
+    "spending_from_p2sh_p2wsh_multisig": false,
+    "spending_from_p2tr_keypath": false,
+    "spending_from_p2tr_scriptpath_multisig": false,
     "spending_from_p2wpkh": true,
-    "spending_from_p2wsh_all": false,
+    "spending_from_p2wsh_custom": false,
     "spending_from_p2wsh_multisig": false,
     "txversion_2": false,
-    "uncompressed_ecdsa_public_keys": false
+    "uncompressed_ecdsa_public_keys": false,
+    "unnecessary_input": false
   }
 }
 ```
@@ -213,77 +224,56 @@ Generate a feature CSV by redirecting standard output:
 ```bash
 fingerprint_analyzer dataset labeled_transactions.csv > features.csv
 
-wallet,anti_fee_sniping,bip69,low_r_grinding,manual_fee_rate_setting,more_than_2_outputs,multi_type_vin,op_return_outputs,sending_to_base58,sending_to_bech32,sending_to_bech32m,spending_from_p2pk,spending_from_p2pkh,spending_from_p2sh_all,spending_from_p2sh_multisig,spending_from_p2sh_p2wpkh,spending_from_p2tr,spending_from_p2wpkh,spending_from_p2wsh_all,spending_from_p2wsh_multisig,txversion_2,uncompressed_ecdsa_public_keys
-Sparrow,1,0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0
-Sparrow,1,0,1,1,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1,0
-...
-
-Created 100 rows with 22 fingerprint features
+Created 100 rows with 32 fingerprint features
 ```
 
-You can override the API URL with `--mempool-url`. The output contains the wallet label and fingerprint columns, but does not
-include the transaction ID. Features are encoded as `1` (true), `0` (false),
-and `-1` (unknown).
+The CSV header contains `wallet` and 32 fingerprint columns. The output omits
+transaction IDs; features are encoded as `1` (true), `0` (false), and `-1`
+(unknown). You can override the API URL with `--mempool-url`.
 
 ### Train and identify
 
 ```bash
 fingerprint_analyzer train
 
-Training dataset: path/to/features.csv
-Samples: 100 | Features: 23 | Wallets: 7
-Class distribution: Bitbox: 10, Blockstream: 11, Core: 13, Electrum: 13, Sparrow: 18, Trezor: 22, Wasabi: 13
-Random baseline (uniform guess): 14.3% (1/7 labels)
-Unknown feature values: 54 / 2300
+Training dataset: .../fingerprint_analyzer/data/features.csv
+Samples: 100 | Features: 32 | Wallets: 7
+...
 
 Decision Tree
-  Holdout: 79 training / 21 test samples
-  Accuracy: 57.1% | Balanced accuracy: 60.7% | Macro F1: 57.8% | Weighted F1: 55.2%
+  5-fold stratified cross-validation: 100 out-of-fold predictions
+  Accuracy: 71.0% | Balanced accuracy: 71.9% | Macro F1: 72.4% | Weighted F1: 71.8%
   Per-class one-vs-rest metrics:
     Class            TPr      TNr      FPr      FNr  Precision   Recall       F1
     -----------  -------  -------  -------  -------  ---------  -------  -------
     Bitbox        100.0%   100.0%     0.0%     0.0%     100.0%   100.0%   100.0%
-    ...
+    Blockstream    63.6%    89.9%    10.1%    36.4%      43.8%    63.6%    51.9%
+    Core           53.8%    95.4%     4.6%    46.2%      63.6%    53.8%    58.3%
+    Electrum       76.9%    98.9%     1.1%    23.1%      90.9%    76.9%    83.3%
+    Sparrow        66.7%    87.8%    12.2%    33.3%      54.5%    66.7%    60.0%
+    Trezor         72.7%    96.2%     3.8%    27.3%      84.2%    72.7%    78.0%
+    Wasabi         69.2%    97.7%     2.3%    30.8%      81.8%    69.2%    75.0%
   Confusion matrix:
     Actual / Predicted |      Bitbox | Blockstream |        Core |    Electrum |     Sparrow |      Trezor |      Wasabi
     -------------------+-------------+-------------+-------------+-------------+-------------+-------------+------------
-    Bitbox             |           2 |           0 |           0 |           0 |           0 |           0 |           0
-    ...
+    Bitbox             |          10 |           0 |           0 |           0 |           0 |           0 |           0
+    Blockstream        |           0 |           7 |           2 |           0 |           2 |           0 |           0
+    Core               |           0 |           2 |           7 |           1 |           3 |           0 |           0
+    Electrum           |           0 |           3 |           0 |          10 |           0 |           0 |           0
+    Sparrow            |           0 |           4 |           1 |           0 |          12 |           1 |           0
+    Trezor             |           0 |           0 |           0 |           0 |           4 |          16 |           2
+    Wasabi             |           0 |           0 |           1 |           0 |           1 |           2 |           9
   Top features:
-    anti_fee_sniping: 19.4%
-    ...
-
-Random Forest
-  Holdout: 79 training / 21 test samples
-  Accuracy: 61.9% | Balanced accuracy: 65.5% | Macro F1: 61.8% | Weighted F1: 59.3%
-  Per-class one-vs-rest metrics:
-    Class            TPr      TNr      FPr      FNr  Precision   Recall       F1
-    -----------  -------  -------  -------  -------  ---------  -------  -------
-    Bitbox        100.0%   100.0%     0.0%     0.0%     100.0%   100.0%   100.0%
-    ...
-  Confusion matrix:
-    Actual / Predicted |      Bitbox | Blockstream |        Core |    Electrum |     Sparrow |      Trezor |      Wasabi
-    -------------------+-------------+-------------+-------------+-------------+-------------+-------------+------------
-    Bitbox             |           2 |           0 |           0 |           0 |           0 |           0 |           0
-    ...
-  Top features:
-    anti_fee_sniping: 15.5%
-    ...
-
-K-Nearest Neighbors
-  Holdout: 79 training / 21 test samples
-  Accuracy: 42.9% | Balanced accuracy: 48.8% | Macro F1: 48.4% | Weighted F1: 43.1%
-  Per-class one-vs-rest metrics:
-    Class            TPr      TNr      FPr      FNr  Precision   Recall       F1
-    -----------  -------  -------  -------  -------  ---------  -------  -------
-    Bitbox        100.0%   100.0%     0.0%     0.0%     100.0%   100.0%   100.0%
-    ...
-  Confusion matrix:
-    Actual / Predicted |      Bitbox | Blockstream |        Core |    Electrum |     Sparrow |      Trezor |      Wasabi
-    -------------------+-------------+-------------+-------------+-------------+-------------+-------------+------------
-    Bitbox             |           2 |           0 |           0 |           0 |           0 |           0 |           0
-    ...
+    txversion_2: 13.9%
+    bip69: 10.3%
+    nlocktime_sub_tip: 10.3%
+    nlocktime_zero: 9.1%
+...
 ```
+
+Training evaluates all nine classifiers with stratified cross-validation. For
+each model, the report includes accuracy metrics, per-class results, a confusion
+matrix, and feature importances when available.
 
 ```bash
 fingerprint_analyzer identify <TXID>
@@ -297,7 +287,7 @@ Transaction: b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
       1. Wasabi (100.0%)
       2. Bitbox (0.0%)
       3. Blockstream (0.0%)
-    Reasons: bip69=1, more_than_2_outputs=1, anti_fee_sniping=0
+    Reasons: bip69=1, more_than_2_outputs=1, nlocktime_anti_fee_sniping=0
 
   [2] Random Forest
       1. Bitbox (50.0%)
