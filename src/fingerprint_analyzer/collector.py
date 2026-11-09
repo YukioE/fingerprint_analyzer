@@ -11,7 +11,7 @@ from .database import FingerprintStore
 from .provider import ElectrsProvider
 
 MAX_CONCURRENCY = 64
-MONTHLY_TRANSACTION_CAP = 100_000
+MONTHLY_TRANSACTION_CAP = 500_000
 
 
 @dataclass
