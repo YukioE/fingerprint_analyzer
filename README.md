@@ -23,9 +23,10 @@ those features with labeled examples using machine-learning classifiers.
   gradient-boosting, logistic-regression, linear-SVM, RBF-SVM,
   K-nearest-neighbor, and Gaussian naive-Bayes classifiers; identify wallets
   using the decision-tree classifier.
-- Inspect likely change outputs by comparing the wallet labels of a transaction
-  and the transactions that spend its outputs. This is a heuristic, not a
-  guarantee.
+- Compare transaction fingerprints with those of their output spenders using an
+  Extra Trees importance-weighted score.
+- Inspect likely change outputs by comparing predicted wallet labels with
+  `ml-change`. This is a heuristic, not a guarantee.
 - Collect confirmed transactions continuously and store their fingerprints and
   block metadata in PostgreSQL.
 - Generate optional classifier evaluation and monthly statistics plots.
@@ -99,6 +100,7 @@ fingerprint_analyzer dataset <input_csv> [--mempool-url URL]
 fingerprint_analyzer train [--dataset CSV]
 fingerprint_analyzer identify <TXID> [<TXID> ...] [--dataset CSV] [--testnet | --testnet4] [--mempool-url URL]
 fingerprint_analyzer change <TXID> [--dataset CSV] [--testnet | --testnet4] [--mempool-url URL]
+fingerprint_analyzer ml-change <TXID> [--dataset CSV] [--testnet | --testnet4] [--mempool-url URL]
 fingerprint_analyzer collect [--testnet | --testnet4] [--mempool-url URL] [--database-url URL] [--start-height HEIGHT] [--poll-interval SECONDS]
 ```
 
@@ -108,16 +110,17 @@ fingerprint_analyzer collect [--testnet | --testnet4] [--mempool-url URL] [--dat
 | `dataset` | Fetch transactions from a labeled CSV and write fingerprint features as CSV to standard output. |
 | `train` | Evaluate all classifiers on a CSV training dataset. |
 | `identify` | Predict wallet labels for one or more transactions using a CSV dataset and all classifiers. |
-| `change` | Predict a transaction's wallet and inspect its outputs' spenders for likely change using a CSV dataset. |
+| `change` | Compare each output spender's fingerprint with the source using Extra Trees feature importance. |
+| `ml-change` | Predict wallet labels for a transaction and its output spenders to identify likely change using a CSV dataset. |
 | `collect` | Continuously collect confirmed transactions into PostgreSQL. |
 
-The `train`, `identify`, and `change` commands accept `--dataset CSV` to choose
-the training dataset. When omitted, the first alphabetically sorted CSV in the
-package's `data` directory is used.
+The `train`, `identify`, `change`, and `ml-change` commands accept
+`--dataset CSV` to choose the training dataset. When omitted, the first
+alphabetically sorted CSV in the package's `data` directory is used.
 
 ### Common transaction options
 
-The `tx`, `identify`, and `change` commands accept:
+The `tx`, `identify`, `change`, and `ml-change` commands accept:
 
 | Option | Description |
 | --- | --- |
@@ -302,10 +305,10 @@ Transaction: b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
     Reasons: bip69=1, more_than_2_outputs=1, manual_fee_rate_setting=1
 ```
 
-When `--dataset` is omitted, `train`, `identify`, and `change` use the first
-alphabetically sorted CSV in the package's `data` directory. A dataset created
-with the `dataset` command can be passed directly with `--dataset`. Extra
-columns not produced by the analyzer are ignored.
+When `--dataset` is omitted, `train`, `identify`, `change`, and `ml-change`
+use the first alphabetically sorted CSV in the package's `data` directory. A
+dataset created with the `dataset` command can be passed directly with
+`--dataset`. Extra columns not produced by the analyzer are ignored.
 
 `train` reports dataset statistics and deterministic stratified cross-validation
 metrics for the supported models. It uses up to five folds, limited by the
@@ -315,36 +318,49 @@ decision-tree prediction as the identified label, and shows each model's top
 three labels and scores for comparison. The scores are not calibrated
 probabilities that the predicted wallet is correct.
 
-### Check likely change outputs
+### Compare fingerprints for change analysis
 
 ```bash
 fingerprint_analyzer change <TXID>
 
-Dataset:          features.csv
-Transaction:      b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
-Decision-tree wallet: Wasabi
+Dataset:    features.csv
+Transaction: b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
 
-Likely change outputs:
-  - Output 2
-
+Change candidates (highest importance-weighted match):
+  - Output 2: 94.2%
 
 Output 0
-  Status:       Not identified as change
-  Spent by:     ded2bc577d46280606e3d8c5f96150904fc521369e4ec8ba733d7eeec9c2d2ba
-  Wallet label: Core
+  Spent by:        ded2bc577d46280606e3d8c5f96150904fc521369e4ec8ba733d7eeec9c2d2ba
+  Weighted fingerprint match: 83.4% (27/31 comparable model features agree)
 
 Output 1
-  Status:       Unspent
+  Status:          Unspent
 
 Output 2
-  Status:       Likely change
-  Spent by:     f62341cdacb39b96efc85d2f4ca15f7764128b1135f57a83a984e43dcc68814b
-  Wallet label: Wasabi
+  Spent by:        f62341cdacb39b96efc85d2f4ca15f7764128b1135f57a83a984e43dcc68814b
+  Weighted fingerprint match: 94.2% (30/31 comparable model features agree)
 ```
 
-The command checks the wallet label predicted for the original transaction
-against the labels predicted for transactions spending its outputs. Outputs
-that are unspent or cannot be classified are reported separately.
+The command trains Extra Trees on the selected dataset and weights each
+matching feature by its global model importance. The score is the importance
+of matching features divided by the total importance of features known in both
+transactions and present in the training dataset; unknown and untrained
+features are excluded. It is a similarity score, not a probability that an
+output is change. The candidate list includes every output tied for the
+highest available score, with no fixed threshold.
+
+### Check likely change outputs using machine learning
+
+```bash
+fingerprint_analyzer ml-change <TXID>
+```
+
+`ml-change` compares the predicted wallet label for the source transaction with
+the predictions for transactions spending its outputs. Its wallet scores are
+model prediction probabilities, not calibrated probabilities that an output
+is change. For same-wallet outputs, it also shows up to three known fingerprint
+conflicts ranked by Extra Trees feature importance, with each feature's rank
+shown against the total number of model features.
 
 ### Collect data in PostgreSQL
 

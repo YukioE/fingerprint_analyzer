@@ -20,7 +20,10 @@ from .feature_data import (
     load_transaction_list,
     write_feature_dataset,
 )
-from .identification import identify_transaction_changes
+from .identification import (
+    compare_transaction_fingerprints,
+    identify_transaction_changes,
+)
 from .ml import first_dataset, train_classifier, train_models
 from .provider import ElectrsProvider, ProviderError
 
@@ -46,6 +49,34 @@ def _bold(text: str) -> str:
     ):
         return f"\033[1m{text}\033[0m"
     return text
+
+
+def _wallet_with_probability(
+    wallet_label: str | None, probability: float | None
+) -> str:
+    """Format an identified wallet with its prediction probability."""
+    label = wallet_label or "no prediction"
+    if probability is None:
+        return f"{label} (probability unavailable)"
+    return f"{label} ({probability:.1%})"
+
+
+def _tree_feature_importances(classifier, feature_names: list[str]) -> dict[str, float]:
+    """Map a tree classifier's feature importances to feature names."""
+    importance_model = (
+        classifier[-1] if hasattr(classifier, "steps") else classifier
+    )
+    return dict(
+        zip(
+            feature_names,
+            getattr(importance_model, "feature_importances_", []),
+        )
+    )
+
+
+def _fingerprint_value(value: int) -> str:
+    """Render a known fingerprint feature value for terminal output."""
+    return "yes" if value == 1 else "no"
 
 
 def _mempool_url_argument(parser: argparse.ArgumentParser) -> None:
@@ -106,11 +137,20 @@ def build_parser() -> argparse.ArgumentParser:
     _network_arguments(identify_parser)
 
     change_parser = subparsers.add_parser(
-        "change", help="identify likely change outputs by analyzing their spenders"
+        "change",
+        help="compare transaction fingerprints with output spenders using model importance",
     )
     change_parser.add_argument("txid", help="transaction ID to analyze")
     _dataset_argument(change_parser)
     _network_arguments(change_parser)
+
+    ml_change_parser = subparsers.add_parser(
+        "ml-change",
+        help="identify likely change outputs by comparing predicted wallet labels",
+    )
+    ml_change_parser.add_argument("txid", help="transaction ID to analyze")
+    _dataset_argument(ml_change_parser)
+    _network_arguments(ml_change_parser)
 
     collect_parser = subparsers.add_parser(
         "collect",
@@ -467,7 +507,7 @@ async def _run_identify(args) -> int:
     return 0
 
 
-async def _run_change(args) -> int:
+async def _run_ml_change(args) -> int:
     """Identify likely change outputs by comparing spending wallet labels."""
     try:
         dataset_path = args.dataset or first_dataset()
@@ -486,18 +526,40 @@ async def _run_change(args) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    feature_importances = _tree_feature_importances(extra_trees, feature_names)
+    importance_ranks = {
+        feature_name: rank
+        for rank, feature_name in enumerate(
+            sorted(
+                feature_names,
+                key=lambda name: feature_importances.get(name, 0),
+                reverse=True,
+            ),
+            start=1,
+        )
+    }
+
     print(f"Dataset:          {dataset_path.name}")
     print(f"Transaction:      {result.transaction_id}")
-    print(f"Extra-trees wallet: {result.wallet_label or 'no prediction'}")
+    print(
+        "Extra-trees wallet: "
+        f"{_wallet_with_probability(result.wallet_label, result.wallet_probability)}"
+    )
 
-    likely_change_outputs = [
-        output.output_index
+    change_candidates = [
+        output
         for output in result.output_spends
         if output.is_change is True
     ]
-    print("\nLikely change outputs:")
-    if likely_change_outputs:
-        print("".join(f"  - Output {index}\n" for index in likely_change_outputs))
+    print("\nChange candidates:")
+    if change_candidates:
+        print(
+            "".join(
+                f"  - Output {output.output_index}: "
+                f"{_wallet_with_probability(output.wallet_label, output.wallet_probability)}\n"
+                for output in change_candidates
+            )
+        )
     else:
         print("None identified")
 
@@ -513,18 +575,105 @@ async def _run_change(args) -> int:
             print("  Status:       Unspent")
             continue
 
-        wallet_label = output.wallet_label or "no prediction"
         if output.is_change is True:
-            change_label = "Likely change"
+            change_label = "Same wallet as source"
         elif output.is_change is False:
-            change_label = "Not identified as change"
+            change_label = "Different wallet from source"
         else:
             change_label = "Undetermined"
         if output.is_change is True:
             change_label = _bold(change_label)
         print(f"  Status:       {change_label}")
         print(f"  Spent by:     {output.spending_transaction_id}")
-        print(f"  Wallet label: {wallet_label}")
+        print(
+            "  Wallet label: "
+            f"{_wallet_with_probability(output.wallet_label, output.wallet_probability)}"
+        )
+        if output.is_change is True:
+            top_conflicts = sorted(
+                output.fingerprint_differences,
+                key=lambda difference: importance_ranks.get(
+                    difference.feature_name, len(feature_names) + 1
+                ),
+            )[:3]
+            if top_conflicts:
+                print("  top 3 Fingerprint conflicts:")
+                for difference in top_conflicts:
+                    rank = importance_ranks.get(
+                        difference.feature_name, len(feature_names)
+                    )
+                    print(
+                        f"    - {difference.feature_name}: "
+                        f"source={_fingerprint_value(difference.source_value)}, "
+                        f"spending={_fingerprint_value(difference.spending_value)} "
+                        f"(importance rank {rank}/{len(feature_names)})"
+                    )
+            else:
+                print("  Fingerprint conflicts: none among known features")
+
+    return 0
+
+
+async def _run_change(args) -> int:
+    """Compare each output spender's fingerprint with the source transaction."""
+    try:
+        dataset_path = args.dataset or first_dataset()
+        extra_trees, feature_names = train_classifier(dataset_path, "extra-trees")
+        feature_importances = _tree_feature_importances(extra_trees, feature_names)
+        provider = _provider(args)
+        transaction = await provider.get_transaction(args.txid)
+        result = await compare_transaction_fingerprints(
+            transaction, provider, feature_importances
+        )
+    except (OSError, ProviderError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Dataset:    {dataset_path.name}")
+    print(f"Transaction: {result.transaction_id}")
+    if not result.output_matches:
+        print("No outputs found.")
+
+    scored_outputs = [
+        (output, output.matching_score)
+        for output in result.output_matches
+        if output.matching_score is not None
+    ]
+    print("\nChange candidates (highest importance-weighted match):")
+    if scored_outputs:
+        highest_score = max(score for _, score in scored_outputs)
+        for output, score in scored_outputs:
+            if score == highest_score:
+                print(
+                    f"  - Output {output.output_index}: "
+                    f"{score:.1%}"
+                )
+    else:
+        print("None (no comparable fingerprint scores)")
+
+    for output in result.output_matches:
+        print(f"\nOutput {output.output_index}")
+        if output.spending_transaction_id is None:
+            print("  Status:          Unspent")
+            continue
+
+        print(f"  Spent by:        {output.spending_transaction_id}")
+        if output.matching_score is None:
+            if output.compared_features:
+                print(
+                    "  Weighted fingerprint match: n/a "
+                    "(comparable features have zero total importance)"
+                )
+            else:
+                print(
+                    "  Weighted fingerprint match: n/a "
+                    "(no comparable known features)"
+                )
+        else:
+            print(
+                f"  Weighted fingerprint match: {output.matching_score:.1%} "
+                f"({output.matching_features}/{output.compared_features} fingerprints matching)"
+            )
 
     return 0
 
@@ -571,6 +720,8 @@ def main() -> None:
         exit_code = asyncio.run(_run_dataset(args))
     elif args.command == "train":
         exit_code = _run_train(args)
+    elif args.command == "ml-change":
+        exit_code = asyncio.run(_run_ml_change(args))
     elif args.command == "change":
         exit_code = asyncio.run(_run_change(args))
     elif args.command == "collect":
