@@ -41,7 +41,8 @@ HEURISTIC_NAMES = (
     "Non-round amount",
     "Optimal change (UIH)",
     "Universal heuristics (majority)",
-    "Wallet fingerprinting",
+    "ML change (Extra Trees)",
+    "Change (weighted fingerprint)",
 )
 
 
@@ -143,21 +144,20 @@ async def evaluate_one(
     provider: ElectrsProvider,
     classifiers: dict[str, object],
     feature_names: list[str],
+    feature_importances: dict[str, float],
     request_semaphore: asyncio.Semaphore,
 ) -> tuple[
     GroundTruth,
-    list[bool] | None,
     dict[str, list[bool]] | None,
     str | None,
 ]:
-    """Fetch and assess one transaction; each output's prediction is a bool."""
+    """Fetch and score both ML and weighted-fingerprint change predictions."""
     try:
         async with request_semaphore:
             transaction = await provider.get_transaction(ground_truth.txid)
         if ground_truth.change_output_index >= len(transaction.outputs):
             return (
                 ground_truth,
-                None,
                 None,
                 f"change output index {ground_truth.change_output_index} "
                 f"outside {len(transaction.outputs)} transaction outputs",
@@ -168,16 +168,39 @@ async def evaluate_one(
             provider,
             classifiers,
             feature_names,
+            feature_importances=feature_importances,
+            include_probabilities=False,
+            include_fingerprint_differences=False,
             request_semaphore=request_semaphore,
+            classifier_name="extra-trees",
         )
+        predictions = {
+            HEURISTIC_NAMES[4]: [
+                output.is_change is True for output in result.output_spends
+            ]
+        }
+        weighted_scores = [
+            output.matching_score for output in result.output_spends
+        ]
+        available_scores = [score for score in weighted_scores if score is not None]
+        if available_scores:
+            highest_score = max(available_scores)
+            predictions[HEURISTIC_NAMES[5]] = [
+                score is not None and score == highest_score
+                for score in weighted_scores
+            ]
+        else:
+            predictions[HEURISTIC_NAMES[5]] = [
+                False for _ in result.output_spends
+            ]
+        predictions.update(universal_predictions(transaction))
         return (
             ground_truth,
-            [output.is_change is True for output in result.output_spends],
-            universal_predictions(transaction),
+            predictions,
             None,
         )
     except (ProviderError, ValueError) as exc:
-        return ground_truth, None, None, str(exc)
+        return ground_truth, None, str(exc)
 
 
 def print_evaluation(
@@ -215,8 +238,14 @@ async def main() -> None:
     args = parser.parse_args()
 
     dataset_path = first_dataset()
-    decision_tree, feature_names = train_classifier(dataset_path, "decision-tree")
-    classifiers = {"decision-tree": decision_tree}
+    extra_trees, feature_names = train_classifier(dataset_path, "extra-trees")
+    importance_model = (
+        extra_trees[-1] if hasattr(extra_trees, "steps") else extra_trees
+    )
+    feature_importances = dict(
+        zip(feature_names, getattr(importance_model, "feature_importances_", []))
+    )
+    classifiers = {"extra-trees": extra_trees}
     provider = ElectrsProvider(base_url=MEMPOOL_API_URL)
     request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
@@ -238,26 +267,26 @@ async def main() -> None:
         tasks = [
             asyncio.create_task(
                 evaluate_one(
-                    row, provider, classifiers, feature_names, request_semaphore
+                    row,
+                    provider,
+                    classifiers,
+                    feature_names,
+                    feature_importances,
+                    request_semaphore,
                 )
             )
             for row in batch
         ]
         for completed in asyncio.as_completed(tasks):
-            ground_truth, predictions, heuristic_predictions, error = await completed
+            ground_truth, heuristic_predictions, error = await completed
             completed_count += 1
             if error is not None:
                 errors_count += 1
                 if len(errors) < 20:
                     errors.append((ground_truth.txid, error))
             else:
-                assert predictions is not None
                 assert heuristic_predictions is not None
-                all_predictions = {
-                    **heuristic_predictions,
-                    HEURISTIC_NAMES[4]: predictions,
-                }
-                for name, candidates in all_predictions.items():
+                for name, candidates in heuristic_predictions.items():
                     scored, correct = score_prediction(
                         candidates, ground_truth.change_output_index
                     )
