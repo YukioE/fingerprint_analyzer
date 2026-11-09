@@ -213,41 +213,66 @@ async def identify_transaction_changes(
     request_semaphore: asyncio.Semaphore | None = None,
     classifier_name: str = "decision-tree",
 ) -> ChangeDetectionResult:
-    """Identify a transaction and check which spent outputs return to its wallet.
+    """Identify a transaction and its spenders with one selected classifier."""
+    classifier = classifiers.get(classifier_name)
+    if classifier is None:
+        raise ValueError(f"A trained {classifier_name!r} classifier is required")
+    results = await identify_transaction_changes_for_classifiers(
+        transaction,
+        provider,
+        {classifier_name: classifier},
+        feature_names,
+        feature_importances=feature_importances,
+        include_probabilities=include_probabilities,
+        include_fingerprint_differences=include_fingerprint_differences,
+        request_semaphore=request_semaphore,
+    )
+    return results[classifier_name]
 
-    For every spent output, the corresponding spending transaction is fetched
-    from the provider and classified with the same selected model as the original
-    transaction. An output is considered change when both transactions have the
-    same identified wallet label. This is a heuristic; transactions without a
-    prediction cannot be assessed. An optional semaphore can cap concurrent
-    provider requests when processing multiple transactions.
-    """
+
+async def identify_transaction_changes_for_classifiers(
+    transaction: Transaction,
+    provider: ElectrsProvider,
+    classifiers: Mapping[str, object],
+    feature_names: list[str],
+    *,
+    feature_importances: Mapping[str, float] | None = None,
+    include_probabilities: bool = True,
+    include_fingerprint_differences: bool = True,
+    request_semaphore: asyncio.Semaphore | None = None,
+) -> dict[str, ChangeDetectionResult]:
+    """Identify change using multiple classifiers while analyzing transactions once."""
+    if not classifiers:
+        raise ValueError("At least one trained classifier is required")
+
     report = analyze(transaction)
-    ordered_features = feature_vector(report, feature_names)
+    source_features = feature_vector(report, feature_names)
     spending_txids, spending_transactions = await _fetch_output_spenders(
         transaction, provider, request_semaphore
     )
+    spending_ids = list(spending_transactions)
     spending_reports = {
-        txid: analyze(spending_transaction)
-        for txid, spending_transaction in spending_transactions.items()
+        txid: analyze(spending_transactions[txid]) for txid in spending_ids
     }
-    spending_features = {
-        txid: feature_vector(report, feature_names)
-        for txid, report in spending_reports.items()
+    spending_features = [
+        feature_vector(spending_reports[txid], feature_names)
+        for txid in spending_ids
+    ]
+    feature_vectors = [source_features, *spending_features]
+    predictions_by_classifier = {
+        classifier_name: _classifier_predictions(
+            feature_vectors,
+            classifiers,
+            classifier_name,
+            include_probabilities=include_probabilities,
+        )
+        for classifier_name in classifiers
     }
-    predicted_values = _classifier_predictions(
-        [ordered_features, *spending_features.values()],
-        classifiers,
-        classifier_name,
-        include_probabilities=include_probabilities,
-    )
-    wallet_label, wallet_probability = predicted_values[0]
-    spending_predictions = dict(
-        zip(spending_features, predicted_values[1:])
-    )
 
     spending_matches = {}
-    for txid, spending_report in spending_reports.items():
+    for txid, spending_report, spending_vector in zip(
+        spending_ids, spending_reports.values(), spending_features
+    ):
         if feature_importances is None:
             matching_score, matching_features, compared_features = None, 0, 0
         else:
@@ -260,65 +285,72 @@ async def identify_transaction_changes(
                 spending_report.fingerprints,
                 feature_importances,
             )
-        spending_matches[txid] = (
-            matching_score,
-            matching_features,
-            compared_features,
+        differences = (
             tuple(
                 FingerprintDifference(feature_name, source_value, spending_value)
                 for feature_name, source_value, spending_value in zip(
-                    feature_names, ordered_features, spending_features[txid]
+                    feature_names, source_features, spending_vector
                 )
                 if source_value != -1
                 and spending_value != -1
                 and source_value != spending_value
             )
             if include_fingerprint_differences
-            else (),
+            else ()
         )
-
-    output_spends = []
-    for output_index, spending_txid in enumerate(spending_txids):
-        spending_label, spending_probability = (
-            spending_predictions[spending_txid]
-            if spending_txid is not None
-            else (None, None)
-        )
-        (
+        spending_matches[txid] = (
             matching_score,
             matching_features,
             compared_features,
-            fingerprint_differences,
-        ) = (
-            spending_matches[spending_txid]
-            if spending_txid is not None
-            else (None, 0, 0, ())
+            differences,
         )
-        if wallet_label is None or spending_label is None:
-            is_change = None
-        else:
-            is_change = wallet_label == spending_label
 
-        output_spends.append(
-            OutputSpendIdentification(
-                output_index=output_index,
-                spending_transaction_id=spending_txid,
-                wallet_label=spending_label,
-                wallet_probability=spending_probability,
-                is_change=is_change,
-                fingerprint_differences=fingerprint_differences,
-                matching_score=matching_score,
-                matching_features=matching_features,
-                compared_features=compared_features,
+    results = {}
+    for classifier_name, predictions in predictions_by_classifier.items():
+        wallet_label, wallet_probability = predictions[0]
+        spending_predictions = dict(zip(spending_ids, predictions[1:]))
+        output_spends = []
+        for output_index, spending_txid in enumerate(spending_txids):
+            spending_label, spending_probability = (
+                spending_predictions[spending_txid]
+                if spending_txid is not None
+                else (None, None)
             )
-        )
+            (
+                matching_score,
+                matching_features,
+                compared_features,
+                fingerprint_differences,
+            ) = (
+                spending_matches[spending_txid]
+                if spending_txid is not None
+                else (None, 0, 0, ())
+            )
+            if wallet_label is None or spending_label is None:
+                is_change = None
+            else:
+                is_change = wallet_label == spending_label
 
-    return ChangeDetectionResult(
-        transaction_id=transaction.txid,
-        wallet_label=wallet_label,
-        wallet_probability=wallet_probability,
-        output_spends=output_spends,
-    )
+            output_spends.append(
+                OutputSpendIdentification(
+                    output_index=output_index,
+                    spending_transaction_id=spending_txid,
+                    wallet_label=spending_label,
+                    wallet_probability=spending_probability,
+                    is_change=is_change,
+                    fingerprint_differences=fingerprint_differences,
+                    matching_score=matching_score,
+                    matching_features=matching_features,
+                    compared_features=compared_features,
+                )
+            )
+        results[classifier_name] = ChangeDetectionResult(
+            transaction_id=transaction.txid,
+            wallet_label=wallet_label,
+            wallet_probability=wallet_probability,
+            output_spends=output_spends,
+        )
+    return results
 
 
 async def compare_transaction_fingerprints(

@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Iterator
 
 from fingerprint_analyzer.fingerprints.helpers import input_type, output_type
-from fingerprint_analyzer.identification import identify_transaction_changes
-from fingerprint_analyzer.ml import first_dataset, train_classifier
+from fingerprint_analyzer.identification import (
+    identify_transaction_changes_for_classifiers,
+)
+from fingerprint_analyzer.ml import ALGORITHMS, first_dataset, train_classifier
 from fingerprint_analyzer.model import Transaction
 from fingerprint_analyzer.provider import ElectrsProvider, ProviderError
 
@@ -36,13 +38,30 @@ INPUT_TYPE_TO_OUTPUT_FAMILY = {
     "p2wsh_unknown": "bech32",
 }
 
+CLASSIFIER_DISPLAY_NAMES = {
+    "decision-tree": "Decision Tree",
+    "random-forest": "Random Forest",
+    "extra-trees": "Extra Trees",
+    "gradient-boosting": "Gradient Boosting",
+    "logistic-regression": "Logistic Regression",
+    "svm-linear": "SVM (Linear)",
+    "svm-rbf": "SVM (RBF)",
+    "knn": "K-Nearest Neighbors",
+    "gaussian-nb": "Gaussian Naive Bayes",
+}
+ML_CHANGE_HEURISTICS = {
+    algorithm: f"ML change ({CLASSIFIER_DISPLAY_NAMES[algorithm]})"
+    for algorithm in ALGORITHMS
+}
+WEIGHTED_CHANGE_HEURISTIC = "Change (weighted fingerprint)"
+
 HEURISTIC_NAMES = (
     "Input/output type match",
     "Non-round amount",
     "Optimal change (UIH)",
     "Universal heuristics (majority)",
-    "ML change (Extra Trees)",
-    "Change (weighted fingerprint)",
+    *ML_CHANGE_HEURISTICS.values(),
+    WEIGHTED_CHANGE_HEURISTIC,
 )
 
 
@@ -163,7 +182,7 @@ async def evaluate_one(
                 f"outside {len(transaction.outputs)} transaction outputs",
             )
 
-        result = await identify_transaction_changes(
+        results = await identify_transaction_changes_for_classifiers(
             transaction,
             provider,
             classifiers,
@@ -172,26 +191,27 @@ async def evaluate_one(
             include_probabilities=False,
             include_fingerprint_differences=False,
             request_semaphore=request_semaphore,
-            classifier_name="extra-trees",
         )
         predictions = {
-            HEURISTIC_NAMES[4]: [
+            ML_CHANGE_HEURISTICS[classifier_name]: [
                 output.is_change is True for output in result.output_spends
             ]
+            for classifier_name, result in results.items()
         }
         weighted_scores = [
-            output.matching_score for output in result.output_spends
+            output.matching_score
+            for output in results["extra-trees"].output_spends
         ]
         available_scores = [score for score in weighted_scores if score is not None]
         if available_scores:
             highest_score = max(available_scores)
-            predictions[HEURISTIC_NAMES[5]] = [
+            predictions[WEIGHTED_CHANGE_HEURISTIC] = [
                 score is not None and score == highest_score
                 for score in weighted_scores
             ]
         else:
-            predictions[HEURISTIC_NAMES[5]] = [
-                False for _ in result.output_spends
+            predictions[WEIGHTED_CHANGE_HEURISTIC] = [
+                False for _ in results["extra-trees"].output_spends
             ]
         predictions.update(universal_predictions(transaction))
         return (
@@ -238,14 +258,23 @@ async def main() -> None:
     args = parser.parse_args()
 
     dataset_path = first_dataset()
-    extra_trees, feature_names = train_classifier(dataset_path, "extra-trees")
+    classifiers = {}
+    feature_names = None
+    for classifier_name in ML_CHANGE_HEURISTICS:
+        classifier, names = train_classifier(dataset_path, classifier_name)
+        if feature_names is not None and names != feature_names:
+            raise ValueError("Classifiers were trained with different feature sets")
+        feature_names = names
+        classifiers[classifier_name] = classifier
+
+    assert feature_names is not None
+    extra_trees = classifiers["extra-trees"]
     importance_model = (
         extra_trees[-1] if hasattr(extra_trees, "steps") else extra_trees
     )
     feature_importances = dict(
         zip(feature_names, getattr(importance_model, "feature_importances_", []))
     )
-    classifiers = {"extra-trees": extra_trees}
     provider = ElectrsProvider(base_url=MEMPOOL_API_URL)
     request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
