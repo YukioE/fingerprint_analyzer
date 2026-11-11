@@ -511,22 +511,22 @@ async def _run_ml_change(args) -> int:
     """Identify likely change outputs by comparing spending wallet labels."""
     try:
         dataset_path = args.dataset or first_dataset()
-        extra_trees, feature_names = train_classifier(dataset_path, "extra-trees")
+        decision_tree, feature_names = train_classifier(dataset_path, "decision-tree")
 
         provider = _provider(args)
         transaction = await provider.get_transaction(args.txid)
         result = await identify_transaction_changes(
             transaction,
             provider,
-            {"extra-trees": extra_trees},
+            {"decision-tree": decision_tree},
             feature_names,
-            classifier_name="extra-trees",
+            classifier_name="decision-tree",
         )
     except (OSError, ProviderError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    feature_importances = _tree_feature_importances(extra_trees, feature_names)
+    feature_importances = _tree_feature_importances(decision_tree, feature_names)
     importance_ranks = {
         feature_name: rank
         for rank, feature_name in enumerate(
@@ -542,7 +542,7 @@ async def _run_ml_change(args) -> int:
     print(f"Dataset:          {dataset_path.name}")
     print(f"Transaction:      {result.transaction_id}")
     print(
-        "Extra-trees wallet: "
+        "Decision tree wallet: "
         f"{_wallet_with_probability(result.wallet_label, result.wallet_probability)}"
     )
 
