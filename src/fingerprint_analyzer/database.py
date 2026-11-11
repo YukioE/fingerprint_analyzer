@@ -56,6 +56,13 @@ class FingerprintStore:
                     """
                 ).format(sql.Identifier(BLOCKS_TABLE))
             )
+            for name in self.fingerprint_names:
+                self.connection.execute(
+                    sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} BOOLEAN").format(
+                        sql.Identifier(TRANSACTIONS_TABLE),
+                        sql.Identifier(name),
+                    )
+                )
 
     def get_latest_height(self) -> int | None:
         """Return the newest stored block height, or ``None`` for an empty store."""
