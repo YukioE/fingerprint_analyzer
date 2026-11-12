@@ -121,9 +121,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     tx_parser = subparsers.add_parser(
-        "tx", help="analyze one or more transactions"
+        "tx", help="analyze a transaction"
     )
-    tx_parser.add_argument("txid", nargs="+", help="one or more transaction IDs")
+    tx_parser.add_argument("txid", help="transaction ID")
     _network_arguments(tx_parser)
 
     dataset_parser = subparsers.add_parser(
@@ -139,9 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
     _dataset_argument(train_parser)
 
     identify_parser = subparsers.add_parser(
-        "identify", help="identify the wallet for one or more transactions"
+        "identify", help="identify the wallet for a transaction"
     )
-    identify_parser.add_argument("txid", nargs="+", help="one or more transaction IDs")
+    identify_parser.add_argument("txid", help="transaction ID")
     _dataset_argument(identify_parser)
     _network_arguments(identify_parser)
 
@@ -199,9 +199,9 @@ def _provider(args) -> ElectrsProvider:
 
 
 async def _fetch_transactions(args):
-    """Fetch all transaction IDs provided to a transaction-oriented command."""
+    """Fetch the transaction provided to a transaction-oriented command."""
     provider = _provider(args)
-    return await asyncio.gather(*(provider.get_transaction(txid) for txid in args.txid))
+    return [await provider.get_transaction(args.txid)]
 
 
 async def _run_tx(args) -> int:
