@@ -64,10 +64,10 @@ def _fetch_monthly_statistics(database_url):
             metrics.append(("txversion_2", "tx_version_2_percent"))
         metrics.extend((name, name) for name in feature_names)
 
-        coinbase_filter = sql.SQL("")
+        non_coinbase_filter = sql.SQL("TRUE")
         if input_features:
-            coinbase_filter = sql.SQL(
-                "WHERE NOT ({})"
+            non_coinbase_filter = sql.SQL(
+                "NOT ({})"
             ).format(
                 sql.SQL(" AND ").join(
                     sql.SQL("t.{} IS FALSE").format(sql.Identifier(name))
@@ -82,10 +82,13 @@ def _fetch_monthly_statistics(database_url):
         for column, alias in metrics:
             fields.append(
                 sql.SQL(
-                    "100.0 * count(*) FILTER (WHERE t.{column} IS TRUE) "
-                    "/ NULLIF(count(*) FILTER (WHERE t.{column} IS NOT NULL), 0) "
+                    "100.0 * count(*) FILTER ("
+                    "WHERE ({non_coinbase_filter}) AND t.{column} IS TRUE) "
+                    "/ NULLIF(count(*) FILTER ("
+                    "WHERE ({non_coinbase_filter}) AND t.{column} IS NOT NULL), 0) "
                     "AS {alias}"
                 ).format(
+                    non_coinbase_filter=non_coinbase_filter,
                     column=sql.Identifier(column),
                     alias=sql.Identifier(alias),
                 )
@@ -96,7 +99,6 @@ def _fetch_monthly_statistics(database_url):
             SELECT {}
             FROM {} AS t
             JOIN {} AS b USING (block_height)
-            {}
             GROUP BY month
             ORDER BY month
             """
@@ -104,7 +106,6 @@ def _fetch_monthly_statistics(database_url):
             sql.SQL(", ").join(fields),
             sql.Identifier(TRANSACTIONS_TABLE),
             sql.Identifier(BLOCKS_TABLE),
-            coinbase_filter,
         )
         rows = connection.execute(query).fetchall()
 
