@@ -44,7 +44,7 @@ Machine-learning datasets encode these as `1`, `0`, and `-1`, respectively;
 
 ## Installation
 
-1. Clone the project: `git clone https://github.com/YukioE/fingerprint_analyzer.git`
+1. Clone the project and cd: `git clone https://github.com/YukioE/fingerprint_analyzer.git` + `cd fingerprint_analyzer`
 2. check your Python version is atleast 3.11 using `python --version`
 3. Run the following commands from the repository directory.
 
