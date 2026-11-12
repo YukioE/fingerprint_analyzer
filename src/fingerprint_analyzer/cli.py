@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 from psycopg import Error as PsycopgError
@@ -83,8 +84,16 @@ def _mempool_url_argument(parser: argparse.ArgumentParser) -> None:
     """Add the option used to override the default API endpoint."""
     parser.add_argument(
         "--mempool-url",
-        help="base URL of an Electrs-compatible mempool API (overrides the network default)",
+        help=(
+            "base URL of an Electrs-compatible mempool API "
+            "(overrides MEMPOOL_URL and the network default)"
+        ),
     )
+
+
+def _mempool_url(args) -> str | None:
+    """Return the command-line URL or the configured environment URL."""
+    return args.mempool_url or os.environ.get("MEMPOOL_URL")
 
 
 def _network_arguments(parser: argparse.ArgumentParser) -> None:
@@ -112,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     tx_parser = subparsers.add_parser(
-        "tx", aliases=["transaction"], help="analyze one or more transactions"
+        "tx", help="analyze one or more transactions"
     )
     tx_parser.add_argument("txid", nargs="+", help="one or more transaction IDs")
     _network_arguments(tx_parser)
@@ -177,15 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _provider(args) -> ElectrsProvider:
-    """Create a provider using the URL override or selected Bitcoin network."""
-    if args.mempool_url:
-        base_url = args.mempool_url
-    elif args.testnet4:
-        base_url = NETWORK_URLS["testnet4"]
-    elif args.testnet:
-        base_url = NETWORK_URLS["testnet"]
-    else:
-        base_url = NETWORK_URLS["mainnet"]
+    """Create a provider using the CLI URL, environment URL, or selected network."""
+    base_url = _mempool_url(args)
+    if not base_url:
+        if args.testnet4:
+            base_url = NETWORK_URLS["testnet4"]
+        elif args.testnet:
+            base_url = NETWORK_URLS["testnet"]
+        else:
+            base_url = NETWORK_URLS["mainnet"]
     return ElectrsProvider(base_url)
 
 
@@ -217,7 +226,7 @@ async def _run_dataset(args) -> int:
     """Convert a labeled transaction CSV into a fingerprint feature CSV."""
     try:
         rows = load_transaction_list(args.input_csv, require_label=True)
-        reports = await analyze_transaction_rows(rows, args.mempool_url)
+        reports = await analyze_transaction_rows(rows, _mempool_url(args))
         if not reports:
             raise ValueError("No transactions could be fetched; no CSV was written")
         feature_names = write_feature_dataset(sys.stdout, reports)
@@ -434,7 +443,7 @@ def _classifier_scores(classifier, features: list[int]) -> list[float]:
 
 
 async def _run_identify(args) -> int:
-    """Classify transactions with the decision tree and show model comparisons."""
+    """Identify transactions by classifier vote and show model comparisons."""
     try:
         dataset_path = args.dataset or first_dataset()
         results, classifiers, feature_names = train_models(dataset_path, mode="identify")
@@ -461,8 +470,11 @@ async def _run_identify(args) -> int:
     for transaction, report in zip(transactions, reports):
         features = feature_vector(report, feature_names)
         model_predictions = {}
+        vote_counts = Counter()
         for algorithm, classifier in classifiers.items():
             probabilities = _classifier_scores(classifier, features)
+            predicted_label = str(classifier.predict([features])[0])
+            vote_counts[predicted_label] += 1
             scores = sorted(
                 enumerate(probabilities),
                 key=lambda item: item[1],
@@ -480,6 +492,7 @@ async def _run_identify(args) -> int:
                 "txid": transaction.txid,
                 "features": features,
                 "predictions": model_predictions,
+                "vote_counts": vote_counts,
             }
         )
 
@@ -487,6 +500,23 @@ async def _run_identify(args) -> int:
     print(f"Dataset: {dataset_path.name}")
     for prediction in predictions:
         print(f"\nTransaction: {prediction['txid']}")
+        vote_counts = prediction["vote_counts"]
+        highest_votes = max(vote_counts.values())
+        vote_winners = [
+            label for label, votes in vote_counts.items() if votes == highest_votes
+        ]
+        vote_kind = "Majority" if highest_votes > len(classifiers) / 2 else "Plurality"
+        if len(vote_winners) == 1:
+            print(
+                f"\n  {vote_kind} vote: {vote_winners[0]} "
+                f"({highest_votes}/{len(classifiers)} classifiers)"
+            )
+        else:
+            tied_labels = ", ".join(
+                f"{label} ({highest_votes}/{len(classifiers)})"
+                for label in vote_winners
+            )
+            print(f"\n  Vote tie: {tied_labels}")
         for model_index, (algorithm, items) in enumerate(prediction["predictions"].items(), start=1):
             model_name = MODEL_NAMES.get(algorithm, algorithm)
             print(f"\n  [{model_index}] {model_name}")
@@ -714,7 +744,7 @@ async def _run_collect(args) -> int:
 def main() -> None:
     """Parse command-line arguments and dispatch to the matching command."""
     args = build_parser().parse_args()
-    if args.command in {"tx", "transaction"}:
+    if args.command == "tx":
         exit_code = asyncio.run(_run_tx(args))
     elif args.command == "dataset":
         exit_code = asyncio.run(_run_dataset(args))
