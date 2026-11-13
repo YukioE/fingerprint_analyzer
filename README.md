@@ -14,7 +14,7 @@ those features with labeled examples using machine-learning classifiers.
   - Fee-rate choices and ECDSA signature/public-key characteristics.
   - Spent input paths, separating single-key, nested/native multisig,
     Taproot key-path/script-path, and custom scripts.
-  - Dust and unnecessary-input heuristics.
+  - Unnecessary-input heuristics.
 - Convert labeled transaction lists into feature datasets.
 - Train and evaluate decision-tree, random-forest, extra-trees,
   gradient-boosting, logistic-regression, linear-SVM, RBF-SVM,
@@ -164,7 +164,6 @@ fingerprint_analyzer tx <TXID> --mempool-url https://your-electrs.example/api
   "fee_rate_sat_vb": 2.401,
   "fingerprints": {
     "bip69": true,
-    "dust_avoidance": true,
     "low_r_grinding": false,
     "manual_fee_rate_setting": true,
     "more_than_2_outputs": true,
@@ -214,10 +213,10 @@ Generate a feature CSV by redirecting standard output:
 ```bash
 fingerprint_analyzer dataset labeled_transactions.csv > features.csv
 
-Created 100 rows with 29 fingerprint features
+Created 100 rows with 28 fingerprint features
 ```
 
-The CSV header contains `wallet` and 29 fingerprint columns. The output omits
+The CSV header contains `wallet` and 28 fingerprint columns. The output omits
 transaction IDs; features are encoded as `1` (true), `0` (false), and `-1`
 (unknown). You can override the API URL with `--mempool-url`.
 
@@ -227,7 +226,7 @@ transaction IDs; features are encoded as `1` (true), `0` (false), and `-1`
 fingerprint_analyzer train
 
 Training dataset: .../data/features.csv
-Samples: 100 | Features: 29 | Wallets: 7
+Samples: 100 | Features: 28 | Wallets: 7
 Class distribution: Bitbox: 10, Blockstream: 11, Core: 13, Electrum: 13, Sparrow: 18, Trezor: 22, Wasabi: 13
 Random baseline (uniform guess): 14.3% (1/7 labels)
 Unknown feature values: 36 / 2900
@@ -317,14 +316,14 @@ Change candidates (highest importance-weighted match):
 
 Output 0
   Spent by:        ded2bc577d46280606e3d8c5f96150904fc521369e4ec8ba733d7eeec9c2d2ba
-  Weighted fingerprint match: 17.1% (19/29 fingerprints matching)
+  Weighted fingerprint match: 17.0% (18/28 fingerprints matching)
 
 Output 1
   Status:          Unspent
 
 Output 2
   Spent by:        f62341cdacb39b96efc85d2f4ca15f7764128b1135f57a83a984e43dcc68814b
-  Weighted fingerprint match: 100.0% (29/29 fingerprints matching)
+  Weighted fingerprint match: 100.0% (28/28 fingerprints matching)
 ```
 The command weights each matching feature by its classifier importance. The score is the importance of matching features divided by the total importance of features known in both transactions and present in the training dataset
 Unknown and untrained features are excluded. It is a similarity score, not a probability that an output is change.

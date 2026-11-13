@@ -196,31 +196,6 @@ def output_type(output) -> str:
     return script_type or "unknown"
 
 
-def dust_threshold(output) -> int | None:
-    """Return the standard 1 sat/vB dust cutoff for supported output templates."""
-    script_type = output.scriptpubkey_type.lower()
-    script = script_bytes(output.scriptpubkey)
-
-    if script_type in {"op_return", "nulldata"} or script.startswith(b"\x6a"):
-        return None
-    if script_type in {"p2pkh", "pubkeyhash", "p2pk"} or (
-        len(script) == 25 and script.startswith(b"\x76\xa9\x14")
-    ):
-        return 546
-    if script_type in {"p2sh", "scripthash"} or (
-        len(script) == 23 and script.startswith(b"\xa9\x14")
-    ):
-        return 540
-    if script_type in {"p2wpkh", "witness_v0_keyhash"} or script.startswith(b"\x00\x14"):
-        return 294
-    if (
-        script_type in {"p2wsh", "witness_v0_scripthash", "p2tr", "witness_v1_taproot"}
-        or script.startswith(b"\x00\x20")
-        or script.startswith(b"\x51\x20")
-    ):
-        return 330
-    return None
-
 
 def signature_candidates(tx: Transaction) -> Iterator[bytes]:
     """Yield data pushes from input witness and scriptSig fields."""
