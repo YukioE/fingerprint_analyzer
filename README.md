@@ -229,28 +229,28 @@ Training dataset: .../data/features.csv
 Samples: 100 | Features: 28 | Wallets: 7
 Class distribution: Bitbox: 10, Blockstream: 11, Core: 13, Electrum: 13, Sparrow: 18, Trezor: 22, Wasabi: 13
 Random baseline (uniform guess): 14.3% (1/7 labels)
-Unknown feature values: 36 / 2900
+Unknown feature values: 36 / 2800
 
 Decision Tree
   5-fold stratified cross-validation: 100 out-of-fold predictions
-  Accuracy: 61.0% | Balanced accuracy: 59.9% | Macro F1: 60.2% | Weighted F1: 61.0%
+  Accuracy: 68.0% | Balanced accuracy: 67.6% | Macro F1: 66.6% | Weighted F1: 67.3%
   Per-class one-vs-rest metrics:
     Class            TPr      TNr      FPr      FNr  Precision   Recall       F1
     -----------  -------  -------  -------  -------  ---------  -------  -------
-    Bitbox         60.0%    96.7%     3.3%    40.0%      66.7%    60.0%    63.2%
+    Bitbox         90.0%    96.7%     3.3%    10.0%      75.0%    90.0%    81.8%
     ...
   Confusion matrix:
     Actual / Predicted |      Bitbox | Blockstream |        Core |    Electrum |     Sparrow |      Trezor |      Wasabi
     -------------------+-------------+-------------+-------------+-------------+-------------+-------------+------------
-    Bitbox             |           6 |           0 |           1 |           0 |           0 |           3 |           0
+    Bitbox             |           9 |           0 |           0 |           0 |           0 |           1 |           0
     ...
   Top features:
-    nlocktime_zero: 12.8%
+    nlocktime_anti_fee_sniping: 14.3%
     ...
 
 Random Forest
   5-fold stratified cross-validation: 100 out-of-fold predictions
-  Accuracy: 76.0% | Balanced accuracy: 76.6% | Macro F1: 75.3% | Weighted F1: 75.0%
+  Accuracy: 78.0% | Balanced accuracy: 77.9% | Macro F1: 77.6% | Weighted F1: 77.9%
   ...
 
   ...
@@ -274,19 +274,19 @@ Transaction: b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
       1. Bitbox (100.0%)
       2. Blockstream (0.0%)
       3. Core (0.0%)
-    Reasons: nlocktime_zero=1, bip69=1, nsequence_0xfffffffd=0
+    Reasons: more_than_2_outputs=1, bip69=1, spending_from_p2wpkh=1
 
   [2] Random Forest
-      1. Wasabi (47.0%)
-      2. Bitbox (40.0%)
-      3. Trezor (7.0%)
-    Reasons: nlocktime_zero=1, bip69=1, more_than_2_outputs=1
+      1. Wasabi (57.0%)
+      2. Bitbox (39.0%)
+      3. Electrum (2.0%)
+    Reasons: bip69=1, more_than_2_outputs=1, nlocktime_zero=1
 
   [3] Extra Trees
-      1. Wasabi (48.0%)
-      2. Bitbox (44.0%)
-      3. Electrum (4.0%)
-    Reasons: nlocktime_zero=1, bip69=1, more_than_2_outputs=1
+      1. Wasabi (53.0%)
+      2. Bitbox (40.0%)
+      3. Electrum (5.0%)
+    Reasons: bip69=1, more_than_2_outputs=1, nlocktime_zero=1
 
     ...
 ```
@@ -316,7 +316,7 @@ Change candidates (highest importance-weighted match):
 
 Output 0
   Spent by:        ded2bc577d46280606e3d8c5f96150904fc521369e4ec8ba733d7eeec9c2d2ba
-  Weighted fingerprint match: 17.0% (18/28 fingerprints matching)
+  Weighted fingerprint match: 17.8% (18/28 fingerprints matching)
 
 Output 1
   Status:          Unspent
@@ -335,7 +335,6 @@ highest available score, with no fixed threshold.
 ```bash
 fingerprint_analyzer ml-change <TXID>
 
-
 Dataset:          features.csv
 Transaction:      b68df4223acd6231908d19af201d710a496cd4832b724b6e1d16711d8d85f862
 Decision tree wallet: Bitbox (100.0%)
@@ -347,7 +346,7 @@ Change candidates:
 Output 0
   Status:       Different wallet from source
   Spent by:     ded2bc577d46280606e3d8c5f96150904fc521369e4ec8ba733d7eeec9c2d2ba
-  Wallet label: Blockstream (100.0%)
+  Wallet label: Blockstream (33.3%)
 
 Output 1
   Status:       Unspent
@@ -413,8 +412,17 @@ python scripts/evaluate_models.py
 python scripts/evaluate_models.py path/to/features.csv
 ```
 
-The evaluation script uses an interactive display when available; otherwise it
-saves PNG files in the current directory or beside the path given to `--output`.
+Evaluate change detection against a labeled dataset (optionally using a custom
+Electrs-compatible API):
+
+```bash
+python scripts/evaluate_change.py path/to/ground_truth.csv
+python scripts/evaluate_change.py path/to/ground_truth.csv --mempool-url https://your-electrs.example/api
+```
+
+The model-evaluation script uses an interactive display when available;
+otherwise it saves PNG files in the current directory or beside the path given
+to `--output`.
 
 Generate monthly charts from collected PostgreSQL data:
 

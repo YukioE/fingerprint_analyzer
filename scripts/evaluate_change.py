@@ -17,7 +17,7 @@ from fingerprint_analyzer.ml import ALGORITHMS, first_dataset, train_classifier
 from fingerprint_analyzer.model import Transaction
 from fingerprint_analyzer.provider import ElectrsProvider, ProviderError
 
-MEMPOOL_API_URL = "http://100.126.92.24:3000"
+MEMPOOL_API_URL = "https://mempool.space/api"
 MAX_CONCURRENT_REQUESTS = 128
 EVALUATION_INTERVAL = 1_000
 # Treat outputs divisible by 1,000 satoshis as round payment amounts.
@@ -255,6 +255,11 @@ def print_evaluation(
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ground_truth", type=Path, help="ground-truth CSV dataset")
+    parser.add_argument(
+        "--mempool-url",
+        default=MEMPOOL_API_URL,
+        help=f"Electrs-compatible API base URL (default: {MEMPOOL_API_URL})",
+    )
     args = parser.parse_args()
 
     dataset_path = first_dataset()
@@ -275,13 +280,13 @@ async def main() -> None:
     feature_importances = dict(
         zip(feature_names, getattr(importance_model, "feature_importances_", []))
     )
-    provider = ElectrsProvider(base_url=MEMPOOL_API_URL)
+    provider = ElectrsProvider(base_url=args.mempool_url)
     request_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
     print(f"Ground truth: {args.ground_truth}")
     print(f"Fingerprint dataset: {dataset_path}")
     print(
-        f"API: {MEMPOOL_API_URL}; "
+        f"API: {args.mempool_url}; "
         f"max concurrent requests: {MAX_CONCURRENT_REQUESTS}"
     )
     ground_truth_rows = iter_ground_truth(args.ground_truth)
