@@ -25,7 +25,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
 
@@ -55,13 +55,6 @@ def first_dataset() -> Path:
     if not datasets:
         raise ValueError(f"No CSV training dataset found in {DATA_DIRECTORY}")
     return datasets[0]
-
-
-def _unknowns_as_nan(features):
-    """Represent unknown fingerprint values as missing values for supported models."""
-    values = np.asarray(features, dtype=float)
-    values[values == -1] = np.nan
-    return values
 
 
 def load_feature_dataset(path: Path) -> tuple[list[list[int]], list[str], list[str]]:
@@ -119,32 +112,23 @@ def _new_classifier(
 ):
     """Create a configured classifier, adapting KNN to the available samples."""
     if algorithm == "decision-tree":
-        return make_pipeline(
-            FunctionTransformer(_unknowns_as_nan),
-            DecisionTreeClassifier(
-                max_features="sqrt",
-                random_state=22,
-            ),
+        return DecisionTreeClassifier(
+            max_features="sqrt",
+            random_state=22,
         )
     if algorithm == "random-forest":
-        return make_pipeline(
-            FunctionTransformer(_unknowns_as_nan),
-            RandomForestClassifier(
-                n_estimators=100,
-                class_weight="balanced",
-                max_features="sqrt",
-                random_state=22,
-            ),
+        return RandomForestClassifier(
+            n_estimators=100,
+            class_weight="balanced",
+            max_features="sqrt",
+            random_state=22,
         )
     if algorithm == "extra-trees":
-        return make_pipeline(
-            FunctionTransformer(_unknowns_as_nan),
-            ExtraTreesClassifier(
-                n_estimators=100,
-                class_weight="balanced",
-                max_features="sqrt",
-                random_state=22,
-            ),
+        return ExtraTreesClassifier(
+            n_estimators=100,
+            class_weight="balanced",
+            max_features="sqrt",
+            random_state=22,
         )
     if algorithm == "gradient-boosting":
         return GradientBoostingClassifier(random_state=22)
