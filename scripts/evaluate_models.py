@@ -149,7 +149,7 @@ def main() -> int:
         except ImportError as error:
             raise RuntimeError(
                 "Plotting requires matplotlib; install with "
-                "`python -m pip install -e '.[pruning-eval]'`"
+                "`python -m pip install -e '.[plotting]'`"
             ) from error
 
         best_index = max(range(len(test_scores)), key=test_scores.__getitem__)

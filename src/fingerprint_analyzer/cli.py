@@ -130,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
         "dataset",
         help="convert labeled transactions from a CSV to fingerprint features",
     )
-    dataset_parser.add_argument("input_csv", type=Path, help="CSV with txid,wallet_label,network")
+    dataset_parser.add_argument("input_csv", type=Path, help="CSV with txid,wallet,network")
     _mempool_url_argument(dataset_parser)
 
     train_parser = subparsers.add_parser(

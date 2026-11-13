@@ -251,7 +251,7 @@ def main():
     except ImportError:
         print(
             "Error: plotting requires matplotlib; install with "
-            "`python -m pip install -e '.[pruning-eval]'`",
+            "`python -m pip install -e '.[plotting]'`",
             file=sys.stderr,
         )
         return 1
