@@ -20,6 +20,7 @@ from sklearn.metrics import (
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
@@ -203,12 +204,24 @@ def _evaluate_predictions(
     test_labels: list[str],
     predictions: list[str],
     all_labels: list[str],
+    scores: np.ndarray,
 ) -> dict:
-    """Calculate metrics and a confusion matrix from known labels and predictions."""
+    """Calculate classification metrics from labels, predictions, and class scores."""
+    roc_auc_per_class = {
+        label: float(
+            roc_auc_score(
+                np.asarray(test_labels) == label,
+                scores[:, index],
+            )
+        )
+        for index, label in enumerate(all_labels)
+    }
     return {
         "test_samples": len(test_labels),
         "accuracy": float(accuracy_score(test_labels, predictions)),
         "balanced_accuracy": float(balanced_accuracy_score(test_labels, predictions)),
+        "roc_auc_ovr_macro": float(np.mean(list(roc_auc_per_class.values()))),
+        "roc_auc_ovr_per_class": roc_auc_per_class,
         "precision_macro": float(
             precision_score(test_labels, predictions, average="macro", zero_division=0)
         ),
@@ -263,6 +276,7 @@ def train_models(
 
         if mode == "evaluate":
             predictions: list[str | None] = [None] * len(labels)
+            scores = np.empty((len(labels), len(all_labels)), dtype=float)
             for training_indices, testing_indices in folds:
                 training_features = [features[index] for index in training_indices]
                 training_labels = [labels[index] for index in training_indices]
@@ -275,6 +289,16 @@ def train_models(
 
                 test_features = [features[index] for index in testing_indices]
                 fold_predictions = classifier.predict(test_features)
+                if hasattr(classifier, "predict_proba"):
+                    fold_scores = classifier.predict_proba(test_features)
+                else:
+                    fold_scores = np.asarray(classifier.decision_function(test_features))
+                    if fold_scores.ndim == 1:
+                        fold_scores = np.column_stack((-fold_scores, fold_scores))
+                for class_index, label in enumerate(classifier.classes_):
+                    scores[testing_indices, all_labels.index(label)] = fold_scores[
+                        :, class_index
+                    ]
                 for index, prediction in zip(testing_indices, fold_predictions):
                     predictions[index] = prediction
 
@@ -284,6 +308,7 @@ def train_models(
                 labels,
                 [prediction for prediction in predictions if prediction is not None],
                 all_labels,
+                scores,
             )
             evaluation["cross_validation_folds"] = len(folds)
         elif mode == "identify":

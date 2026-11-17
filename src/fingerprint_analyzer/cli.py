@@ -295,6 +295,7 @@ def _run_train(args) -> int:
                 _bold(
                     f"  Accuracy: {evaluation['accuracy']:.1%} | "
                     f"Balanced accuracy: {evaluation['balanced_accuracy']:.1%} | "
+                    f"ROC AUC (macro): {evaluation['roc_auc_ovr_macro']:.1%} | "
                     f"Macro F1: {evaluation['f1_macro']:.1%} | "
                     f"Weighted F1: {evaluation['f1_weighted']:.1%}"
                 )
@@ -305,7 +306,16 @@ def _run_train(args) -> int:
             matrix = evaluation["confusion_matrix"]
             total = sum(sum(row) for row in matrix)
             label_width = max(len("Class"), *(len(label) for label in labels))
-            metric_columns = ("TPr", "TNr", "FPr", "FNr", "Precision", "Recall", "F1")
+            metric_columns = (
+                "TPr",
+                "TNr",
+                "FPr",
+                "FNr",
+                "Precision",
+                "Recall",
+                "F1",
+                "ROC AUC",
+            )
             metric_widths = {
                 "TPr": 7,
                 "TNr": 7,
@@ -314,6 +324,7 @@ def _run_train(args) -> int:
                 "Precision": 9,
                 "Recall": 7,
                 "F1": 7,
+                "ROC AUC": 7,
             }
             print(
                 f"    {'Class':<{label_width}}  "
@@ -362,7 +373,8 @@ def _run_train(args) -> int:
                     f"{true_positive_rate:>7}  {true_negative_rate:>7}  "
                     f"{false_positive_rate:>7}  {false_negative_rate:>7}  "
                     f"{metrics['precision']:>9.1%}  {metrics['recall']:>7.1%}  "
-                    f"{metrics['f1-score']:>7.1%}"
+                    f"{metrics['f1-score']:>7.1%}  "
+                    f"{evaluation['roc_auc_ovr_per_class'][label]:>7.1%}"
                 )
 
             column_width = max(5, *(len(label) for label in labels))

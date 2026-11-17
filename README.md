@@ -233,11 +233,11 @@ Unknown feature values: 36 / 2800
 
 Decision Tree
   5-fold stratified cross-validation: 100 out-of-fold predictions
-  Accuracy: 68.0% | Balanced accuracy: 67.6% | Macro F1: 66.6% | Weighted F1: 67.3%
+  Accuracy: 68.0% | Balanced accuracy: 67.6% | ROC AUC (macro): 80.6% | Macro F1: 66.6% | Weighted F1: 67.3%
   Per-class one-vs-rest metrics:
-    Class            TPr      TNr      FPr      FNr  Precision   Recall       F1
-    -----------  -------  -------  -------  -------  ---------  -------  -------
-    Bitbox         90.0%    96.7%     3.3%    10.0%      75.0%    90.0%    81.8%
+    Class            TPr      TNr      FPr      FNr  Precision   Recall       F1  ROC AUC
+    -----------  -------  -------  -------  -------  ---------  -------  -------  -------
+    Bitbox         90.0%    96.7%     3.3%    10.0%      75.0%    90.0%    81.8%    93.3%
     ...
   Confusion matrix:
     Actual / Predicted |      Bitbox | Blockstream |        Core |    Electrum |     Sparrow |      Trezor |      Wasabi
@@ -250,15 +250,18 @@ Decision Tree
 
 Random Forest
   5-fold stratified cross-validation: 100 out-of-fold predictions
-  Accuracy: 78.0% | Balanced accuracy: 77.9% | Macro F1: 77.6% | Weighted F1: 77.9%
+  Accuracy: 78.0% | Balanced accuracy: 77.9% | ROC AUC (macro): 93.7% | Macro F1: 77.6% | Weighted F1: 77.9%
   ...
 
   ...
 ```
 
 Training evaluates all nine classifiers with stratified cross-validation. For
-each model, the report includes accuracy metrics, per-class results, a confusion
-matrix, and feature importances when available.
+each model, the report includes accuracy metrics, macro one-vs-rest ROC AUC,
+per-class results (including one-vs-rest ROC AUC), a confusion matrix, and
+feature importances when available. AUC is calculated from out-of-fold class
+probabilities when available, or decision scores otherwise; the macro AUC is
+the unweighted mean of the per-class AUCs.
 
 ```bash
 fingerprint_analyzer identify <TXID>
